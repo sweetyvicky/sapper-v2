@@ -1,5 +1,9 @@
 # sapper-v2 — 自主渗透军团
 
+## 受保护模式快速开始
+
+先按[中文操作文档](docs/AUTHORIZED-PENTEST.md)中的轻量离线 Linux Docker 命令运行 `python lib/sapper.py pentest demo`。无需密钥或外部目标。当前支持 JSON Mock 编排、有界 HTTP、精确人工审批、证据复核与持久预算；不支持实时模型适配器。旧模型/网络启动器需明确设置 `SAPPER_MODE=competition`；这只是旧产品选择，不是恶意进程沙箱。
+
 > 第三届腾讯云智能攻防挑战赛线上赛**冠军**（634 支队伍 · 80.18/100 · 8 小时全程无人值守）·
 > GeekCon 2026 AI 挑战赛**一等奖**
 >

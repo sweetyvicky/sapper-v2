@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# Explicit operator selection; this is not a hostile-process sandbox.
+if [ "${SAPPER_MODE:-protected}" != "competition" ]; then
+    printf "%s\n" "use sapper pentest ...; legacy mode requires SAPPER_MODE=competition" >&2
+    exit 1
+fi
 # local-sim.sh — full local-mode simulation of the TSecBench hosted run.
 #
 # Boots the mock platform (exact /openapi/v1/challenges contract) plus a
@@ -26,6 +31,7 @@ echo "platform=$PLATFORM target=${TARGET:-multi($TARGET_M)}"
 
 echo "== running $IMAGE (real GLM engine, 12-minute budget) =="
 docker run --rm --name sapper-sim --network host \
+  -e SAPPER_MODE=competition \
   -e BENCHMARK_BASE_URL="$PLATFORM" \
   -e BENCHMARK_TOKEN=mock-token \
   -e ANTHROPIC_BASE_URL="${ANTHROPIC_BASE_URL:-https://open.bigmodel.cn/api/anthropic}" \

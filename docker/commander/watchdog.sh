@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# Explicit operator selection; this is not a hostile-process sandbox.
+if [ "${SAPPER_MODE:-protected}" != "competition" ]; then
+    printf "%s\n" "use sapper pentest ...; legacy mode requires SAPPER_MODE=competition" >&2
+    exit 1
+fi
 # watchdog.sh — the dumb guardian loop (commander architecture, SPEC unit 2).
 #
 # Failure modes handled (single sweep, sleep 15s, checks in SPEC order):

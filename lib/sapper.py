@@ -1424,6 +1424,11 @@ def _rotate_key() -> bool:
     return True
 
 
+def require_competition():
+    if os.environ.get("SAPPER_MODE") != "competition":
+        raise FGError("use sapper pentest ...; legacy mode requires SAPPER_MODE=competition")
+
+
 def run_claude(
     prompt: str,
     *,
@@ -1442,6 +1447,7 @@ def run_claude(
     --dangerously-skip-permissions / --append-system-prompt are appended
     claude-style, so non-claude engines should ignore or translate them in
     the wrapper."""
+    require_competition()
     if timeout < 1:
         raise FGError("claude timeout must be at least 1 second")
     if not isinstance(model, str) or not model.strip():
@@ -4693,6 +4699,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="stop at this ISO 8601 local time (e.g. 2026-10-17T13:00:00)")
     sp.set_defaults(func=cmd_auto)
 
+    from pentest.cli import register
+    register(sub)
     return p
 
 
@@ -4714,6 +4722,11 @@ def main(argv: list[str] | None = None) -> int:
     if getattr(args, "templates", None) is None and getattr(args, "func", None) in (cmd_dispatch, cmd_auto):
         args.templates = str(_resolve_templates_dir(args))
     try:
+        if (args.command in ("auto", "dispatch", "command", "bench", "sweep", "send")
+                or (args.command == "arena" and args.action != "init")
+                or (args.command == "flag" and args.submit)
+                or (args.command == "fleet" and args.action != "init")):
+            require_competition()
         return args.func(args)
     except FGError as exc:
         sys.stderr.write(f"sapper: {exc}\n")
