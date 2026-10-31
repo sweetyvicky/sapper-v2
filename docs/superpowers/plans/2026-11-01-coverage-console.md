@@ -4,7 +4,7 @@
 
 **Goal:** Provide a Chinese daily-engagement workspace showing asset coverage, explicit test-plan coverage, execution progress, and evidence drill-down, informed by the recorded ARTEX study and implemented independently.
 
-**Architecture:** Extend existing controller models with genuinely read-only views and a versioned coverage plan. Derive every coverage cell from persisted runtime/evidence records or attributed operator assessment. Serve an offline-capable vanilla HTML/CSS/JS workspace from a loopback-only read-only HTTP viewer; export self-contained snapshots and recorded deterministic lab replay.
+**Architecture:** Extend existing controller models with genuinely read-only views and a versioned coverage plan. Derive every coverage cell from persisted runtime/evidence records or attributed operator assessment. Serve an offline-capable vanilla HTML/CSS/JS workspace from a host-loopback read-only HTTP viewer (native loopback or explicit isolated-container mode); export self-contained snapshots and recorded deterministic lab replay.
 
 **Tech Stack:** Existing Python 3.12+ stdlib and SQLite on Linux; native browser JavaScript, no frontend build/runtime dependencies; local Playwright CLI for real-browser verification; pinned offline Python 3.12/3.13 Docker tests.
 
@@ -65,14 +65,14 @@ assert coverage.snapshot()['metrics']['tests']['covered'] == 0
 coverage-import --state DIR --plan FILE --actor NAME
 coverage-assess --state DIR --asset-id ID --check-id ID --outcome completed|not_applicable --actor NAME --note TEXT [--fact-id ID ...]
 coverage-status --state DIR
-dashboard --state DIR --port 0
+dashboard --state DIR --port 0 [--container-listen]
 dashboard-export --state DIR --output FILE
 dashboard-demo --output FILE
 ```
 
-- [ ] RED real-entrypoint/API tests: no-traceback malformed input, coverage plan/assessment commands, strict loopback binding, Host/Origin/session capability checks, GET-only whitelist, no traversal, no mutation after page/API refresh, no body or path leakage, escaped malicious metadata, corrupt-state errors and expired-evidence refresh.
+- [ ] RED real-entrypoint/API tests: no-traceback malformed input, coverage plan/assessment commands, default loopback binding, explicit Docker-only listener validation, Host/Origin/session capability checks, GET-only whitelist, no traversal, no mutation after page/API refresh, no body or path leakage, escaped malicious metadata, corrupt-state errors and expired-evidence refresh.
 - [ ] Build a Chinese light workspace with project/refresh header, two separately explained coverage metrics, backlog/evidence gaps, asset tree, asset×check matrix, task timeline, worker states, detail pane and findings/review status. Implement search, status/type filters, tabs, drill-down, refresh, stale/error state and snapshot download. Maintain keyboard/accessibility labels and responsive layout.
-- [ ] Implement local viewer with stdlib ThreadingHTTPServer bound only to 127.0.0.1, exact route/Host checks, unguessable viewer-only capability for API, no CORS, no-store, restrictive CSP and no-referrer. Do not expose write/run/approve endpoints. Static files are fixed packaged assets, never arbitrary paths.
+- [ ] Implement local viewer with stdlib ThreadingHTTPServer bound by default to 127.0.0.1 (explicit Docker-only mode binds inside an internal network, with a PowerShell launcher publishing only host 127.0.0.1), exact route/Host checks, unguessable viewer-only capability for API, no CORS, no-store, restrictive CSP and no-referrer. Do not expose write/run/approve endpoints. Static files are fixed packaged assets, never arbitrary paths.
 - [ ] Export standalone HTML embedding safely escaped snapshot data and local application assets. It must open from file without a server or internet, with explicit captured-at/snapshot labeling. Provide a recorded demo replay with play/pause/step controls; frames come from actual deterministic loopback actions and snapshots, never fabricated successes.
 - [ ] Demo covers planned but untested assets, queued/blocked work, running request, successful observation, manual assessment pending/completed, failed attempt, a justified not-applicable cell, later invalidated evidence, and all four roles. Only its own ephemeral local HTTP fixture is contacted. Capture a current state and a sequence of real snapshots; clean up processes, sockets and state.
 - [ ] Real-browser verification using Playwright CLI: open exported demo, inspect desktop/mobile layout, filter matrix, select a cell/asset, inspect evidence, switch tabs, replay steps, verify no unexpected browser requests/errors and malicious labels remain inert. Parent owns screenshots and browser acceptance; implementer owns reusable backend tests and final report.
@@ -83,3 +83,7 @@ dashboard-demo --output FILE
 All application tests run inside the established container flags: `--network none --cpus 2 --memory 512m --pids-limit 128 --cap-drop ALL --security-opt no-new-privileges --read-only --tmpfs /tmp:rw,nosuid,nodev,size=128m`, source mounted read-only, no published target ports. Browser acceptance uses a local snapshot file or loopback-only viewer. The viewer never drives test traffic.
 
 Pinned images remain `python:3.12-slim@sha256:aa943ce411423c7582288f18707ff66eddcbaeb510502d747a72aeb34f30d159` and `python:3.13-slim@sha256:2d44738ebf4ce5f63b9d9ea871e9c7cfdc0426f7b0c97cac915fd88ded1d86bb`. Baseline already verified:152 tests on both versions and GitHub CI; do not rerun unchanged baseline before work.
+
+## Windows Docker viewer refinement
+
+The selected development environment is Linux Docker on Windows. Binding only container loopback prevents normal published-port access. Keep native binding at 127.0.0.1 and add explicit Docker-only --container-listen for this deployment, requiring a fixed port. The provided launcher uses a dedicated internal network, read-only mount, and host-loopback publication; it never exposes a public host port. This is a local usability refinement, not execution authority. Browser acceptance must verify the real Windows endpoint and stale refresh behavior.
