@@ -38,11 +38,11 @@ CoverageStore.snapshot() -> dict
 
 The task brief defines exact schemas, limits, state rules, API error behavior, and version semantics. Read-only mode opens existing SQLite files with mode=ro and never executes schema/initialization/mutation; writes fail closed. Existing default mutable APIs keep their behavior. Strict plan import is one atomic revision and exact repeat is idempotent. Assessments bind the current plan revision; a changed plan retains history and conservatively resets manual assessments.
 
-- [ ] Write RED tests with real existing Campaign/Ledger/EvidenceStore fixtures: read-only reopen leaves all source files byte-identical, rejects mutations and missing/corrupt state; GET-style snapshots do not recover expired pending leases.
-- [ ] Implement read-only constructors/connectors and shared status serialization without duplicating validation or creating a second authority for receipts.
-- [ ] Write RED tests for duplicate/cyclic assets, target/intent/tool mismatches, exact denominators, zero denominator, explicit last-attempt ordering, manual assessment rules, revisions, evidence invalidation and no authority from plan fields.
-- [ ] Implement strict coverage-plan storage, attributed assessments, stable matrix states, asset hierarchy and metadata-only task/receipt/fact/finding links.
-- [ ] Verify concrete examples such as:
+- [x] Write RED tests with real existing Campaign/Ledger/EvidenceStore fixtures: read-only reopen leaves all source files byte-identical, rejects mutations and missing/corrupt state; GET-style snapshots do not recover expired pending leases.
+- [x] Implement read-only constructors/connectors and shared status serialization without duplicating validation or creating a second authority for receipts.
+- [x] Write RED tests for duplicate/cyclic assets, target/intent/tool mismatches, exact denominators, zero denominator, explicit last-attempt ordering, manual assessment rules, revisions, evidence invalidation and no authority from plan fields.
+- [x] Implement strict coverage-plan storage, attributed assessments, stable matrix states, asset hierarchy and metadata-only task/receipt/fact/finding links.
+- [x] Verify concrete examples such as:
 
 ```python
 view = coverage.snapshot()
@@ -53,7 +53,7 @@ campaign.evidence.invalidate(fact_id, 'retracted fixture', 'operator')
 assert coverage.snapshot()['metrics']['tests']['covered'] == 0
 ```
 
-- [ ] Run focused coverage and existing boundary/evidence/runtime tests in pinned offline Linux Docker, commit, freeze exact public output contract in the task report, and resolve independent review findings.
+- [x] Run focused coverage and existing boundary/evidence/runtime tests in pinned offline Linux Docker, commit, freeze exact public output contract in the task report, and resolve independent review findings.
 
 ## Task 2: Visual workspace, read-only local API and repeatable demo
 
@@ -70,12 +70,12 @@ dashboard-export --state DIR --output FILE
 dashboard-demo --output FILE
 ```
 
-- [ ] RED real-entrypoint/API tests: no-traceback malformed input, coverage plan/assessment commands, default loopback binding, explicit Docker-only listener validation, Host/Origin/session capability checks, GET-only whitelist, no traversal, no mutation after page/API refresh, no body or path leakage, escaped malicious metadata, corrupt-state errors and expired-evidence refresh.
-- [ ] Build a Chinese light workspace with project/refresh header, two separately explained coverage metrics, backlog/evidence gaps, asset tree, asset×check matrix, task timeline, worker states, detail pane and findings/review status. Implement search, status/type filters, tabs, drill-down, refresh, stale/error state and snapshot download. Maintain keyboard/accessibility labels and responsive layout.
-- [ ] Implement local viewer with stdlib ThreadingHTTPServer bound by default to 127.0.0.1 (explicit Docker-only mode binds inside a dedicated bridge network, with a PowerShell launcher publishing only host 127.0.0.1), exact route/Host checks, unguessable viewer-only capability for API, no CORS, no-store, restrictive CSP and no-referrer. Do not expose write/run/approve endpoints. Static files are fixed packaged assets, never arbitrary paths.
-- [ ] Export standalone HTML embedding safely escaped snapshot data and local application assets. It must open from file without a server or internet, with explicit captured-at/snapshot labeling. Provide a recorded demo replay with play/pause/step controls; frames come from actual deterministic loopback actions and snapshots, never fabricated successes.
-- [ ] Demo covers planned but untested assets, queued/blocked work, running request, successful observation, manual assessment pending/completed, failed attempt, a justified not-applicable cell, later invalidated evidence, and all four roles. Only its own ephemeral local HTTP fixture is contacted. Capture a current state and a sequence of real snapshots; clean up processes, sockets and state.
-- [ ] Real-browser verification using Playwright CLI: open exported demo, inspect desktop/mobile layout, filter matrix, select a cell/asset, inspect evidence, switch tabs, replay steps, verify no unexpected browser requests/errors and malicious labels remain inert. Parent owns screenshots and browser acceptance; implementer owns reusable backend tests and final report.
+- [x] RED real-entrypoint/API tests: no-traceback malformed input, coverage plan/assessment commands, default loopback binding, explicit Docker-only listener validation, Host/Origin/session capability checks, GET-only whitelist, no traversal, no mutation after page/API refresh, no body or path leakage, escaped malicious metadata, corrupt-state errors and expired-evidence refresh.
+- [x] Build a Chinese light workspace with project/refresh header, two separately explained coverage metrics, backlog/evidence gaps, asset tree, asset×check matrix, task timeline, worker states, detail pane and findings/review status. Implement search, status/type filters, tabs, drill-down, refresh, stale/error state and snapshot download. Maintain keyboard/accessibility labels and responsive layout.
+- [x] Implement local viewer with stdlib ThreadingHTTPServer bound by default to 127.0.0.1 (explicit Docker-only mode binds inside a dedicated bridge network, with a PowerShell launcher publishing only host 127.0.0.1), exact route/Host checks, unguessable viewer-only capability for API, no CORS, no-store, restrictive CSP and no-referrer. Do not expose write/run/approve endpoints. Static files are fixed packaged assets, never arbitrary paths.
+- [x] Export standalone HTML embedding safely escaped snapshot data and local application assets. It must open from file without a server or internet, with explicit captured-at/snapshot labeling. Provide a recorded demo replay with play/pause/step controls; frames come from actual deterministic loopback actions and snapshots, never fabricated successes.
+- [x] Demo covers planned but untested assets, queued/blocked work, running request, successful observation, manual assessment pending/completed, failed attempt, a justified not-applicable cell, later invalidated evidence, and all four roles. Only its own ephemeral local HTTP fixture is contacted. Capture a current state and a sequence of real snapshots; clean up processes, sockets and state.
+- [x] Real-browser verification using Playwright CLI: open exported demo, inspect desktop/mobile layout, filter matrix, select a cell/asset, inspect evidence, switch tabs, replay steps, verify no unexpected browser requests/errors and malicious labels remain inert. Parent owns screenshots and browser acceptance; implementer owns reusable backend tests and final report.
 - [ ] Run full pinned offline Python3.12/3.13 suite plus existing demo/manual and new dashboard-demo. Resolve task and whole-branch review findings; publish the new branch/PR, verify CI, and save Chinese acceptance/handover plus a clickable offline HTML demo in outputs.
 
 ## Verification
