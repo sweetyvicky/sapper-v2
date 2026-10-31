@@ -76,7 +76,8 @@ dashboard-demo --output FILE
 - [x] Export standalone HTML embedding safely escaped snapshot data and local application assets. It must open from file without a server or internet, with explicit captured-at/snapshot labeling. Provide a recorded demo replay with play/pause/step controls; frames come from actual deterministic loopback actions and snapshots, never fabricated successes.
 - [x] Demo covers planned but untested assets, queued/blocked work, running request, successful observation, manual assessment pending/completed, failed attempt, a justified not-applicable cell, later invalidated evidence, and all four roles. Only its own ephemeral local HTTP fixture is contacted. Capture a current state and a sequence of real snapshots; clean up processes, sockets and state.
 - [x] Real-browser verification using Playwright CLI: open exported demo, inspect desktop/mobile layout, filter matrix, select a cell/asset, inspect evidence, switch tabs, replay steps, verify no unexpected browser requests/errors and malicious labels remain inert. Parent owns screenshots and browser acceptance; implementer owns reusable backend tests and final report.
-- [ ] Run full pinned offline Python3.12/3.13 suite plus existing demo/manual and new dashboard-demo. Resolve task and whole-branch review findings; publish the new branch/PR, verify CI, and save Chinese acceptance/handover plus a clickable offline HTML demo in outputs.
+- [x] Run full pinned offline Python3.12/3.13 suite plus existing demo/manual and new dashboard-demo. Resolve task and whole-branch review findings.
+- Delivery status is bound in the final acceptance/delivery records: branch and PR publication, source-tree equality, GitHub CI, Chinese handover and standalone HTML. This implementation plan is not a live CI status page.
 
 ## Verification
 
