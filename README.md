@@ -189,3 +189,5 @@ thanks to TSecBench and GeekCon for the battlegrounds.
 **Author**: N1nEmAn · VarFusion Lab ｜ WeChat: 未知聚变 (VarFusion)
 
 **License**: MIT (plus [DISCLAIMER.md](DISCLAIMER.md))
+
+The local read-only Chinese coverage workspace, standalone snapshot and real recorded replay are documented in [Coverage Console](docs/COVERAGE-CONSOLE.md).

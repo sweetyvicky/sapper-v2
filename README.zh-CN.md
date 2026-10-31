@@ -124,3 +124,5 @@ docker run -d --name sapper ... sapper:latest
 **作者**：N1nEmAn · 未知聚变实验室（VarFusion Lab）｜公众号：未知聚变
 
 **License**：MIT（附加 [DISCLAIMER.md](DISCLAIMER.md)）
+
+中文只读覆盖工作台、独立离线快照与真实隔离过程回放见[测试覆盖工作台](docs/COVERAGE-CONSOLE.md)。
