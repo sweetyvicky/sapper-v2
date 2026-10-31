@@ -1,5 +1,9 @@
 # sapper-v2 — The Autonomous Pentest Legion
 
+## Protected quick start
+
+Start with the offline JSON Mock campaign: `python lib/sapper.py pentest demo` inside the resource-limited Linux Docker command in [the operator guide](docs/AUTHORIZED-PENTEST.md). No keys or external targets are needed. Bounded HTTP, exact operator approval, evidence review and persistent budgets are implemented; live model adapters are unsupported. Legacy model/network launchers now require explicit `SAPPER_MODE=competition`. That setting selects the old product; it is not a hostile-process sandbox.
+
 > **Champion** of the 3rd Tencent Cloud Intelligent Attack-Defense Challenge online qualifier
 > (634 teams · 80.18/100 · 8 hours fully unattended) · **First Prize**, GeekCon 2026 AI Challenge
 >

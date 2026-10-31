@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# Explicit operator selection; this is not a hostile-process sandbox.
+if [ "${SAPPER_MODE:-protected}" != "competition" ]; then
+    printf "%s\n" "use sapper pentest ...; legacy mode requires SAPPER_MODE=competition" >&2
+    exit 1
+fi
 # tmux-drive.sh v2 — self-healing driver for the TUI-mode agent fleet.
 #
 # Failure modes handled:

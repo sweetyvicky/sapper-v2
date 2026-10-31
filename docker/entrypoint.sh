@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# Explicit operator selection; this is not a hostile-process sandbox.
+if [ "${SAPPER_MODE:-protected}" != "competition" ]; then
+    printf "%s\n" "use sapper pentest ...; legacy mode requires SAPPER_MODE=competition" >&2
+    exit 1
+fi
 # sapper-entrypoint — container start: validate env, then drive TSecBench.
 #
 # ONE-SHOT match rules (Throne Protocol online round): a single evaluation,

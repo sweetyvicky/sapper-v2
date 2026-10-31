@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# Explicit operator selection; this is not a hostile-process sandbox.
+if [ "${SAPPER_MODE:-protected}" != "competition" ]; then
+    printf "%s\n" "use sapper pentest ...; legacy mode requires SAPPER_MODE=competition" >&2
+    exit 1
+fi
 # entrypoint.sh — commander-architecture container start (unit 4).
 #
 # Brings up tmux session 'sapper-cmd' (window 0 = 'commander'), starts the

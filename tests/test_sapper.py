@@ -36,7 +36,8 @@ class GraphIntegrityTests(unittest.TestCase):
             rendered = sapper.render_graph_text(self.store)
         self.assertIn("goal: ship it", rendered)
         self.assertIn("missing string 'description'", stderr.getvalue())
-        errors = sapper.validate_graph(self.store)
+        with contextlib.redirect_stderr(stderr):
+            errors = sapper.validate_graph(self.store)
         self.assertTrue(any("f001.json" in error for error in errors))
 
     def test_init_refuses_non_empty_directory(self):
@@ -165,7 +166,7 @@ class GraphIntegrityTests(unittest.TestCase):
             sapper,
             "run_claude",
             return_value={"result": '{"accepted": true, "data": {"verified": false, "issues": "mismatch"}}'},
-        ):
+        ), contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
             rc = sapper._dispatch_verify(
                 self.store, ROOT / "templates", "sonnet", 10, False, ROOT, args
             )
@@ -208,7 +209,8 @@ class GraphIntegrityTests(unittest.TestCase):
         sapper._apply_brainstorm(self.store, payload)
         picked = self.store.list_intents()[0]
         args = type("Args", (), {"store": str(self.store.root), "id": picked["id"], "purge": False})()
-        sapper.cmd_brainstorm_pick(args)
+        with contextlib.redirect_stdout(io.StringIO()):
+            sapper.cmd_brainstorm_pick(args)
         intents = self.store.list_intents()
         self.assertEqual(sum(i["to"] is None for i in intents), 1)
         self.assertEqual(sum(i["to"] is not None for i in intents), 1)
@@ -468,7 +470,8 @@ class ArenaClientTests(unittest.TestCase):
                 return self._reply({"unique_code": "c1", "container_addr": ["10.0.0.9:80"]})
 
         server = HTTPServer(("127.0.0.1", 0), Handler)
-        threading.Thread(target=server.serve_forever, daemon=True).start()
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
         try:
             client = arena.ArenaClient(f"http://127.0.0.1:{server.server_address[1]}", "tok-x")
             chs = client.list_challenges()
@@ -481,6 +484,8 @@ class ArenaClientTests(unittest.TestCase):
             self.assertTrue(client.close_challenge("c1")["closed"])
         finally:
             server.shutdown()
+            server.server_close()
+            thread.join(3)
 
         # every call carried the BENCHMARK_TOKEN header
         self.assertTrue(all(entry[2] == "tok-x" for entry in seen), seen)
@@ -512,7 +517,8 @@ class ArenaClientTests(unittest.TestCase):
                 self.wfile.write(data)
 
         server = HTTPServer(("127.0.0.1", 0), Handler)
-        threading.Thread(target=server.serve_forever, daemon=True).start()
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
         try:
             client = arena.ArenaClient(f"http://127.0.0.1:{server.server_address[1]}", "t")
             with self.assertRaises(arena.ArenaError) as ctx:
@@ -521,6 +527,8 @@ class ArenaClientTests(unittest.TestCase):
             self.assertEqual(ctx.exception.status, 409)
         finally:
             server.shutdown()
+            server.server_close()
+            thread.join(3)
 
     def test_config_resolution_env_and_file(self):
         arena = self._arena()
@@ -583,7 +591,8 @@ class ArenaErrorBridgeTests(unittest.TestCase):
                 self.wfile.write(data)
 
         server = HTTPServer(("127.0.0.1", 0), Handler)
-        threading.Thread(target=server.serve_forever, daemon=True).start()
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
         try:
             client = arena.ArenaClient(
                 f"http://127.0.0.1:{server.server_address[1]}", "t")
@@ -592,6 +601,8 @@ class ArenaErrorBridgeTests(unittest.TestCase):
             self.assertIn("max active", str(ctx.exception).lower())
         finally:
             server.shutdown()
+            server.server_close()
+            thread.join(3)
 
 
 class CommanderTests(unittest.TestCase):
@@ -657,7 +668,8 @@ class FleetTests(unittest.TestCase):
                 import os
                 os.chdir(tmp)
                 args = type("A", (), {"action": "init", "file": "fleet.json"})()
-                self.assertEqual(sapper.cmd_fleet(args), 0)
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(sapper.cmd_fleet(args), 0)
                 cfg = sapper._fleet_load(Path("fleet.json"))
                 self.assertTrue(cfg["panes"])
                 args2 = type("A", (), {"action": "init", "file": "fleet.json"})()
@@ -711,6 +723,10 @@ class KeyRotationTests(unittest.TestCase):
         self.assertFalse(sapper._is_quota_error("claude exited 2: bad args"))
 
     def test_pool_load_and_rotate(self):
+        stderr = io.StringIO()
+        redirect = contextlib.redirect_stderr(stderr)
+        redirect.__enter__()
+        self.addCleanup(redirect.__exit__, None, None, None)
         pool_json = json.dumps([
             {"base_url": "http://a", "token": "t1", "model": "m1"},
             {"base_url": "http://b", "token": "t2", "model": "m2"},
