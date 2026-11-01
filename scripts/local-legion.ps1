@@ -7,10 +7,10 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $pythonImage = 'python:3.12-slim@sha256:aa943ce411423c7582288f18707ff66eddcbaeb510502d747a72aeb34f30d159'
-if (-not [IO.Path]::IsPathFullyQualified($HomeDirectory)) { throw 'HomeDirectory must be absolute.' }
+if (-not [IO.Path]::IsPathFullyQualified($HomeDirectory)) { throw 'HomeDirectory 必须是绝对路径。' }
 $base = [IO.Path]::GetFullPath($HomeDirectory)
 if ($base -eq [IO.Path]::GetPathRoot($base) -or $base.TrimEnd('\','/') -eq [Environment]::GetFolderPath('UserProfile').TrimEnd('\','/')) {
-    throw 'Choose a dedicated deployment directory, not a drive or user profile root.'
+    throw '请选择专用部署目录，不能使用磁盘根目录或用户主目录。'
 }
 New-Item -ItemType Directory -Path $base -Force | Out-Null
 $lock = [IO.File]::Open((Join-Path $base 'operation.lock'), 'OpenOrCreate', 'ReadWrite', 'None')
@@ -18,7 +18,7 @@ $manifestPath = Join-Path $base 'deployment.json'
 $ownerPath = Join-Path $base 'owner.txt'
 $source = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 function Docker([string[]]$Arguments) {
-    $output = & docker @Arguments 2>&1
+    $output = & docker.exe @Arguments 2>&1
     if ($LASTEXITCODE -ne 0) { throw ('Docker operation failed: ' + ($output -join "`n")) }
     return ($output -join "`n")
 }
@@ -29,14 +29,14 @@ function Save-Manifest {
 }
 function Inspect-Owned($resource, [string]$kind) {
     if (-not $resource -or -not $resource.id) { return $null }
-    $raw = & docker $kind inspect $resource.id 2>$null
+    $raw = & docker.exe $kind inspect $resource.id 2>$null
     if ($LASTEXITCODE -ne 0) { return $null }
     $item = ($raw -join "`n" | ConvertFrom-Json -AsHashtable)[0]
     $labels = if ($kind -eq 'container') { $item.Config.Labels } else { $item.Labels }
     $name = $item.Name.TrimStart('/')
     if ($item.Id -ne $resource.id -or $name -ne $resource.name -or
         $labels['sapper.local.owner'] -ne $script:owner -or $labels['sapper.local.run'] -ne $script:manifest.runId) {
-        throw 'Resource ownership mismatch; refusing to control it.'
+        throw '资源归属不匹配，已拒绝操作。'
     }
     return $item
 }
@@ -47,7 +47,7 @@ function Stop-Owned {
         if ($item) {
             # Preserve private process logs locally; never emit the fragment credential.
             $logPath = Join-Path $script:manifest.artifacts ($key + '.log')
-            & docker logs $resource.id 2>&1 | Set-Content -LiteralPath $logPath -Encoding utf8
+            & docker.exe logs $resource.id 2>&1 | Set-Content -LiteralPath $logPath -Encoding utf8
             if ($item.State.Running) { Docker @('stop','--time','10',$resource.id) | Out-Null }
             Docker @('rm',$resource.id) | Out-Null
         }
@@ -78,8 +78,8 @@ function Show-Status {
        state=$script:manifest.state; artifacts=$script:manifest.artifacts;
        viewer=(Resource-Status $script:manifest.viewer); exercise=(Resource-Status $script:manifest.exercise);
        url=('http://127.0.0.1:'+$script:manifest.port+'/');
-       scope='Synthetic loopback only; logical Mock roles, not live models';
-       viewerNetwork='Dedicated ordinary bridge; viewer has network capability' } | ConvertTo-Json -Depth 8
+       scope='仅合成回环演练；逻辑 Mock 角色，不是真实模型';
+       viewerNetwork='独立普通 bridge；查看器具有网络能力' } | ConvertTo-Json -Depth 8
 }
 function Container-Args([string]$name, [string]$network, [bool]$readOnlyState) {
     $stateMount = 'type=bind,source='+$script:manifest.state+',target=/state'
@@ -144,7 +144,7 @@ function Start-Run {
         }
         Start-Sleep -Milliseconds 250
     }
-    if (-not $url) { throw 'Viewer readiness deadline exceeded.' }
+    if (-not $url) { throw '等待查看器就绪超时。' }
     # A restarted consumed run only reopens its viewer. Replay creates new state.
     if (-not (Test-Path -LiteralPath (Join-Path $script:manifest.state 'exercise-started.json'))) {
         $exerciseName = $prefix+'-exercise'
@@ -172,9 +172,9 @@ try {
         'Status' { Show-Status }
         'Stop' { if ($script:manifest) { Stop-Owned }; Show-Status }
         'Open' {
-            if (-not $script:manifest) { throw 'Start a local deployment first.' }
+            if (-not $script:manifest) { throw '请先使用 Start 启动本地部署。' }
             $url=Viewer-Url
-            if (-not $url) { throw 'Viewer is not running. Use Start.' }
+            if (-not $url) { throw '查看器未运行，请使用 Start。' }
             Write-Output $url
             if (-not $NoBrowser) { Start-Process $url }
         }
@@ -196,4 +196,6 @@ try {
         }
     }
 } finally { $lock.Dispose() }
+
+
 
