@@ -316,7 +316,11 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(snap['run']['status'],'blocked'); self.assertIsNone(snap['plan'])
         self.assertEqual(snap['model_calls'][0]['status'],'failed'); self.assertEqual(self.hits,[])
         self.model_mode='ok'; self.ws.resume(rid); self.ws.wait(rid,timeout=10)
-        snap=self.ws.snapshot(rid); self.assertEqual(snap['run']['status'],'awaiting_approval',snap['run']['stop_reason'])
+        snap=self.ws.snapshot(rid)
+        diagnostic=dict(status=snap['run']['status'],stop_reason=snap['run']['stop_reason'],
+            calls=[{key:call[key] for key in ('id','role','purpose','status','message_ids')} for call in snap['model_calls']],
+            errors=[e['detail'] for e in snap['events'] if e['kind']=='operation_blocked'])
+        self.assertEqual(snap['run']['status'],'awaiting_approval',diagnostic)
         self.model_mode='analysis_error'; self.approve(snap); self.ws.start(rid); self.ws.wait(rid,timeout=10)
         snap=self.ws.snapshot(rid); self.assertEqual(snap['run']['status'],'blocked'); self.assertEqual(len(self.hits),1)
         self.model_mode='ok'; self.ws.resume(rid); self.ws.wait(rid,timeout=10)
@@ -458,7 +462,10 @@ class WorkspaceTests(unittest.TestCase):
         rid,item=self.interrupted_execution(terminal=False)
         with self.assertRaises(WorkspaceError): self.ws.resume(rid)
         self.assertEqual(self.hits,[])
-        self.assertEqual(self.ws.snapshot(rid)['budget']['usage']['requests'],1)
+        snap=self.ws.snapshot(rid)
+        self.assertEqual(snap['budget']['usage']['requests'],1)
+        self.assertEqual(snap['runtime']['tasks'][0]['receipt_state'],'pending')
+        self.assertIsNone(snap['runtime']['tasks'][0]['receipt'])
 
     def test_preflight_expiry_is_bound_to_creation_not_dns_completion(self):
         now=[time.time()]
@@ -528,10 +535,244 @@ class WorkspaceTests(unittest.TestCase):
         self.ws.message(rid,dict(request_id=uuid.uuid4().hex,kind='retest',text='Review independently',finding_id=case['id']))
         snap=self.execute(self.ws.snapshot(rid)); advice=snap['review_suggestions'][0]
         self.assertTrue(advice['evidence_current_valid'])
+        before={fmt:self.ws.report(rid,fmt) for fmt in ('markdown','html')}
         fact=next(f for f in snap['runtime']['evidence']['facts'] if advice['evidence_id'] in f['evidence_ids'])
         self.ws.invalidate_fact(rid,fact['id'],actor='operator',reason='Withdraw independent observation')
         self.assertFalse(self.ws.snapshot(rid)['review_suggestions'][0]['evidence_current_valid'])
         self.assertEqual(self.ws.finding(rid,case['id'])['status'],'candidate')
+        for fmt in ('markdown','html'):
+            exported=self.ws.report(rid,fmt)
+            self.assertNotEqual(exported,before[fmt])
+            self.assertIn('独立证据当前有效性',exported)
+            self.assertIn('无效或缺失',exported)
+            self.assertIn('尚未采纳',exported)
+
+    def guidance(self,rid,text):
+        return self.ws.message(rid,dict(request_id=uuid.uuid4().hex,kind='guidance',text=text))
+
+    def assert_guidance_consumed(self,rid,message,history=()):
+        snap=self.ws.snapshot(rid)
+        item=next(m for m in snap['messages'] if m['id']==message['id'])
+        self.assertEqual(item['status'],'consumed',dict(run=snap['run']['status'],stop_reason=snap['run']['stop_reason'],message=item))
+        call=next(c for c in snap['model_calls'] if c['id']==item['consumer'])
+        self.assertEqual(call['purpose'],'plan'); self.assertIn(item['id'],call['message_ids'])
+        self.assertEqual(call['result']['history_message_ids'],list(history))
+        context=next(context for _,context in self.model_requests if any(m['id']==item['id'] for m in context['guidance']))
+        self.assertEqual(next(m['text'] for m in context['guidance'] if m['id']==item['id']),message['text'])
+        self.assertEqual(self.hits,[])
+        self.assertTrue(all(a['approval_id'] is None for a in snap['plan']['actions']))
+
+    def test_guidance_during_initial_plan_gets_model_only_continuation(self):
+        config=self.model_fixture(); self.model_mode='wait_plan'
+        draft=self.draft(**config); rid=self.ws.prepare(draft['id'],1)['id']
+        self.assertTrue(self.model_entered.wait(5))
+        message=self.guidance(rid,'Initial pending hint')
+        self.model_release.set(); self.ws.wait(rid,timeout=10)
+        self.assert_guidance_consumed(rid,message)
+        self.assertEqual(len(self.model_requests),2)
+
+    def test_guidance_during_idle_plan_gets_actual_consumer_and_history(self):
+        config=self.model_fixture(); rid=self.prepare(**config)['run']['id']; self.model_mode='wait_plan'
+        first=self.guidance(rid,'First hint'); self.assertTrue(self.model_entered.wait(5))
+        second=self.guidance(rid,'Second hint')
+        self.model_release.set(); self.ws.wait(rid,timeout=10)
+        self.assert_guidance_consumed(rid,second,[first['id']])
+        self.assertEqual(len(self.model_requests),3)
+
+    def test_end_of_job_guidance_handoff_is_atomic(self):
+        from unittest import mock
+        config=self.model_fixture(); rid=self.prepare(**config)['run']['id']
+        finished,release=threading.Event(),threading.Event()
+        original=self.ws._guidance_job
+        def at_return(key):
+            original(key); finished.set(); self.assertTrue(release.wait(5))
+        with mock.patch.object(self.ws,'_guidance_job',side_effect=at_return):
+            first=self.guidance(rid,'First end window hint')
+            self.assertTrue(finished.wait(5))
+            second=self.guidance(rid,'Concurrent end window hint')
+            release.set(); self.ws.wait(rid,timeout=10)
+        self.assert_guidance_consumed(rid,second,[first['id']])
+
+    def test_pause_window_explicitly_fails_unsent_guidance(self):
+        config=self.model_fixture(); self.model_mode='wait_plan'
+        draft=self.draft(**config); rid=self.ws.prepare(draft['id'],1)['id']
+        self.assertTrue(self.model_entered.wait(5)); message=self.guidance(rid,'Unsent paused hint')
+        self.assertEqual(self.ws.pause(rid)['status'],'pause_requested')
+        self.model_release.set(); self.ws.wait(rid,timeout=10)
+        snap=self.ws.snapshot(rid)
+        self.assertEqual(snap['run']['status'],'paused')
+        self.assertEqual(snap['messages'][0]['status'],'failed')
+        self.assertEqual(snap['messages'][0]['consumer'],'controller')
+        self.assertEqual(len(self.model_requests),1); self.assertEqual(self.hits,[])
+
+    def test_continuation_budget_failure_is_explicit_and_charged_once(self):
+        config=self.model_fixture(); self.model_mode='wait_plan'
+        draft=self.draft(**config,budgets=dict(model_calls=1)); rid=self.ws.prepare(draft['id'],1)['id']
+        self.assertTrue(self.model_entered.wait(5)); message=self.guidance(rid,'Cannot exceed one call')
+        self.model_release.set(); self.ws.wait(rid,timeout=10)
+        snap=self.ws.snapshot(rid)
+        self.assertEqual(snap['run']['status'],'blocked')
+        self.assertEqual(snap['messages'][0]['status'],'failed')
+        self.assertEqual(snap['messages'][0]['consumer'],'controller')
+        self.assertEqual(len(snap['model_calls']),1); self.assertEqual(self.hits,[])
+        self.assertEqual(self.ws.message(rid,{key:message[key] for key in ('request_id','kind','text')})['status'],'failed')
+        self.assertEqual(len(self.model_requests),1)
+
+    def test_paused_guidance_drains_then_new_pause_stops_unsent_input(self):
+        config=self.model_fixture(); rid=self.prepare(**config)['run']['id']; self.ws.pause(rid)
+        self.model_mode='wait_plan'
+        first=self.guidance(rid,'Paused first'); self.assertTrue(self.model_entered.wait(5))
+        second=self.guidance(rid,'Paused second')
+        self.model_release.set(); self.ws.wait(rid,timeout=10)
+        self.assert_guidance_consumed(rid,second,[first['id']])
+        self.assertEqual(self.ws.snapshot(rid)['run']['status'],'paused')
+        self.model_entered.clear(); self.model_release.clear()
+        self.guidance(rid,'Paused third'); self.assertTrue(self.model_entered.wait(5))
+        unsent=self.guidance(rid,'Paused fourth')
+        self.assertEqual(self.ws.pause(rid)['status'],'pause_requested')
+        self.model_release.set(); self.ws.wait(rid,timeout=10)
+        snap=self.ws.snapshot(rid)
+        self.assertEqual(snap['run']['status'],'paused')
+        self.assertEqual(next(m['status'] for m in snap['messages'] if m['id']==unsent['id']),'failed')
+        self.assertEqual(len(self.model_requests),4); self.assertEqual(self.hits,[])
+
+    def test_close_window_fails_queued_guidance_and_joins_owned_job(self):
+        from unittest import mock
+        config=self.model_fixture(); rid=self.prepare(**config)['run']['id']; self.model_mode='wait_plan'
+        self.guidance(rid,'Current call'); self.assertTrue(self.model_entered.wait(5))
+        self.guidance(rid,'Queued before close')
+        requested=threading.Event(); original=self.ws._patch; failures=[]
+        def observe_patch(key,**patch):
+            result=original(key,**patch)
+            if patch.get('stop_reason')=='service_close_requested': requested.set()
+            return result
+        def close():
+            try: self.ws.close()
+            except Exception as error: failures.append(type(error).__name__)
+        with mock.patch.object(self.ws,'_patch',side_effect=observe_patch):
+            closer=threading.Thread(target=close); closer.start()
+            try:
+                self.assertTrue(requested.wait(5)); self.model_release.set()
+            finally:
+                self.model_release.set(); closer.join(10)
+        self.assertFalse(closer.is_alive()); self.assertEqual(failures,[])
+        snap=self.ws.snapshot(rid)
+        self.assertEqual(snap['run']['status'],'paused')
+        self.assertEqual([m['status'] for m in snap['messages']],['consumed','failed'])
+        self.assertEqual(len(self.model_requests),2); self.assertEqual(self.hits,[])
+
+    def test_retired_job_accepts_new_guidance_and_stays_owned_until_join(self):
+        from unittest import mock
+        config=self.model_fixture(); rid=self.prepare(**config)['run']['id']
+        retired,release,joining=threading.Event(),threading.Event(),threading.Event()
+        original=self.ws._job; old=[]
+        def hold_retired(key,operation):
+            original(key,operation)
+            if not retired.is_set():
+                old.append(threading.current_thread()); retired.set(); release.wait(5)
+        with mock.patch.object(self.ws,'_job',side_effect=hold_retired):
+            first=self.guidance(rid,'First retired hint'); self.assertTrue(retired.wait(5))
+            second=self.guidance(rid,'After logical retirement'); self.ws.wait(rid,timeout=10)
+            self.assert_guidance_consumed(rid,second,[first['id']])
+            join=old[0].join; failures=[]
+            def observed_join(timeout=None):
+                joining.set(); return join(timeout)
+            def close():
+                try: self.ws.close()
+                except Exception as error: failures.append(type(error).__name__)
+            with mock.patch.object(old[0],'join',side_effect=observed_join):
+                closer=threading.Thread(target=close); closer.start()
+                try: self.assertTrue(joining.wait(5))
+                finally: release.set(); closer.join(10)
+            self.assertFalse(closer.is_alive()); self.assertFalse(old[0].is_alive())
+            self.assertEqual(failures,[])
+
+    def test_close_before_stop_patch_is_acknowledged_at_job_retirement(self):
+        from unittest import mock
+        config=self.model_fixture(); self.model_mode='wait_plan'
+        draft=self.draft(**config); rid=self.ws.prepare(draft['id'],1)['id']
+        self.assertTrue(self.model_entered.wait(5)); self.guidance(rid,'Hint at close boundary')
+        delayed,release=threading.Event(),threading.Event(); original=self.ws._lock; failures=[]
+        def lock(key):
+            if threading.current_thread() is closer and not delayed.is_set():
+                delayed.set(); release.wait(5)
+            return original(key)
+        def close():
+            try: self.ws.close()
+            except Exception as error: failures.append(type(error).__name__)
+        closer=threading.Thread(target=close)
+        with mock.patch.object(self.ws,'_lock',side_effect=lock):
+            closer.start()
+            try:
+                self.assertTrue(delayed.wait(5)); self.model_release.set(); self.ws.wait(rid,timeout=10)
+                snap=self.ws.snapshot(rid)
+                self.assertEqual(snap['run']['status'],'paused')
+                self.assertEqual(snap['messages'][0]['status'],'failed')
+            finally:
+                self.model_release.set(); release.set(); closer.join(10)
+        self.assertFalse(closer.is_alive()); self.assertEqual(failures,[])
+        self.assertEqual(len(self.model_requests),1); self.assertEqual(self.hits,[])
+
+    def test_final_settlement_failure_is_safe_needs_attention(self):
+        from unittest import mock
+        errors=[]
+        with mock.patch.object(self.ws,'_settle',side_effect=WorkspaceError('storage','Safe settlement failure')), \
+                mock.patch.object(threading,'excepthook',side_effect=lambda args:errors.append(args.exc_type.__name__)):
+            snap=self.prepare()
+        self.assertEqual(snap['run']['status'],'needs_attention')
+        self.assertEqual(errors,[])
+        self.assertEqual(self.hits,[])
+        self.assertTrue(any(e['kind']=='operation_blocked' and e['detail']['code']=='storage' for e in snap['events']))
+
+    def test_message_at_failed_job_retirement_is_explicitly_failed(self):
+        from unittest import mock
+        config=self.model_fixture(); self.model_mode='error'; draft=self.draft(**config)
+        failed,retiring,release=threading.Event(),threading.Event(),threading.Event()
+        original_fail=self.ws._fail_queued; original_lock=self.ws._lock
+        def fail(key,reason):
+            original_fail(key,reason); failed.set()
+        def lock(key):
+            if failed.is_set() and threading.current_thread().name.startswith('operator-') and not retiring.is_set():
+                retiring.set(); release.wait(5)
+            return original_lock(key)
+        with mock.patch.object(self.ws,'_fail_queued',side_effect=fail),mock.patch.object(self.ws,'_lock',side_effect=lock):
+            rid=self.ws.prepare(draft['id'],1)['id']
+            try:
+                self.assertTrue(retiring.wait(5)); self.guidance(rid,'Too late for failed job')
+            finally: release.set()
+            self.ws.wait(rid,timeout=10)
+        snap=self.ws.snapshot(rid)
+        self.assertEqual(snap['messages'][0]['status'],'failed')
+        self.assertEqual(snap['messages'][0]['consumer'],'controller')
+        self.assertEqual(len(self.model_requests),1); self.assertEqual(self.hits,[])
+
+    def test_failed_terminal_receipts_are_verified_without_mutating_reads(self):
+        import hashlib,sqlite3
+        from contextlib import closing
+        for mutation in ('body','missing','binding'):
+            with self.subTest(mutation=mutation):
+                snap=self.execute(self.prepare(('/one','/two'),max_response_bytes=1)); rid=snap['run']['id']
+                tasks=snap['runtime']['tasks']
+                self.assertEqual({t['state'] for t in tasks},{'failed'})
+                self.assertEqual({t['receipt_state'] for t in tasks},{'verified'})
+                self.assertTrue(all(t['receipt']['status']=='failed' for t in tasks))
+                self.assertTrue(all('body' not in t['receipt'] and 'error' not in t['receipt'] for t in tasks))
+                self.assertEqual(snap['runtime']['evidence']['facts'],[])
+                campaign=self.ws.store.campaign_path(rid)
+                if mutation=='binding':
+                    with closing(sqlite3.connect(campaign/'runtime.sqlite')) as db,db:
+                        db.execute('UPDATE tasks SET receipt_id=? WHERE id=?',(tasks[1]['receipt_id'],tasks[0]['task_id']))
+                else:
+                    with closing(sqlite3.connect(campaign/'ledger.sqlite')) as db,db:
+                        if mutation=='body': db.execute('UPDATE executions SET body=?',(b'corrupted-private-body',))
+                        else: db.execute('DELETE FROM executions WHERE id=?',(tasks[0]['receipt_id'],))
+                def inventory():
+                    return {str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in self.root.rglob('*') if p.is_file()}
+                before=inventory()
+                for read in (lambda:self.ws.snapshot(rid),lambda:self.ws.report(rid,'html')):
+                    with self.assertRaises(WorkspaceError) as error: read()
+                    self.assertNotIn('corrupted-private-body',str(error.exception))
+                self.assertEqual(inventory(),before)
 
 
     def test_unsent_guidance_has_explicit_failure_when_job_stops_on_model_error(self):

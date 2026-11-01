@@ -303,3 +303,17 @@ class WorkspaceTests(unittest.TestCase):
             self.assertNotIn('<script>x</script>',output)
             self.assertNotIn('<img src=x>',output)
             self.assertNotIn('已确认',output.split('模型复核建议')[-1].split('预算与模型调用')[0])
+
+    def test_report_advice_distinguishes_current_independent_evidence_validity(self):
+        *_,render=self.api()
+        for fmt in ('markdown','html'):
+            outputs=[]
+            for value,label in ((True,'有效'),(False,'无效或缺失'),(None,'未知或未提供')):
+                advice=dict(outcome='confirmed',current_finding_status='candidate',note='<script>literal advice</script>')
+                if value is not None: advice['evidence_current_valid']=value
+                output=render(dict(version=1,review_suggestions=[advice]),fmt)
+                outputs.append(output)
+                self.assertIn('独立证据当前有效性',output); self.assertIn(label,output)
+                self.assertIn('尚未采纳',output); self.assertIn('candidate',output)
+                self.assertNotIn('<script>',output); self.assertIn('literal advice',output)
+            self.assertEqual(len(set(outputs)),3)
