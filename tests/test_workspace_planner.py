@@ -5,6 +5,7 @@ import importlib
 import json
 import os
 from pathlib import Path
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -220,6 +221,77 @@ class PlannerTests(unittest.TestCase):
         self.models.save(data,profile_id=self.profile['id'])
         self.denied(lambda:self.api().execute_call(self.models,prepared)); self.assertEqual(self.hits,[])
 
+    def test_consumed_guidance_continues_in_real_provider_context_without_reconsumption(self):
+        self.fixture()
+        earlier=[]
+        for note in ('first operator constraint', 'second operator correction'):
+            message=self.store.add_message(self.run['id'],dict(request_id=uuid.uuid4().hex,kind='guidance',text=note))
+            prepared=self.prepare(guidance=[message])
+            result=self.api().execute_call(self.models,prepared)
+            self.store.finish_model_call(self.run['id'],prepared['call']['id'],status='succeeded',result=result)
+            earlier.append(self.store.finish_message(self.run['id'],message['id'],status='consumed',
+                consumer=prepared['call']['id'],result='applied once'))
+        new=self.store.add_message(self.run['id'],dict(request_id=uuid.uuid4().hex,kind='guidance',text='new guidance'))
+        unused=self.store.add_message(self.run['id'],dict(request_id=uuid.uuid4().hex,kind='guidance',text='not supplied'))
+        failed=self.store.add_message(self.run['id'],dict(request_id=uuid.uuid4().hex,kind='guidance',text='failed guidance'))
+        self.store.finish_message(self.run['id'],failed['id'],status='failed',consumer='prior-call',result='failed')
+        other=self.store.add_message(self.run['id'],dict(request_id=uuid.uuid4().hex,kind='prioritize',text='not guidance'))
+        self.store.finish_message(self.run['id'],other['id'],status='consumed',consumer='controller',result='applied')
+        before=self.store.messages(self.run['id'])
+        prepared=self.prepare(guidance=[new])
+        result=self.api().execute_call(self.models,prepared)
+        prompt=json.loads(self.hits[-1]['messages'][1]['content'])
+        self.assertIn('history',prompt,'consumed operator guidance is missing from later calls')
+        self.assertEqual(prompt['history'],earlier)
+        self.assertEqual(prompt['guidance'],[new])
+        ids=[m['id'] for m in earlier]
+        self.assertEqual(prepared['history_message_ids'],ids)
+        self.assertEqual(result['metadata']['history_message_ids'],ids)
+        self.assertEqual(prepared['call']['message_ids'],[new['id']])
+        self.assertEqual(self.store.model_calls(self.run['id'])[-1]['message_ids'],[new['id']])
+        self.assertEqual(self.store.messages(self.run['id']),before)
+        self.assertEqual(next(m for m in before if m['id']==unused['id'])['status'],'queued')
+        again=self.prepare()
+        self.assertEqual(json.loads(again['messages'][1]['content'])['history'],earlier)
+        self.assertEqual(again['call']['message_ids'],[])
+        self.assertEqual(again['history_message_ids'],ids)
+        result['metadata']['history_message_ids'].append('changed')
+        self.assertEqual(prepared['history_message_ids'],ids)
+
+    def test_oversized_consumed_history_fails_before_additional_reservation(self):
+        messages=[self.store.add_message(self.run['id'],dict(request_id=uuid.uuid4().hex,kind='guidance',text='x'*4000)) for _ in range(70)]
+        call=self.store.reserve_model_call(self.run['id'],role='Commander',profile_id=self.profile['id'],
+            purpose='guidance',message_ids=[m['id'] for m in messages])
+        self.store.finish_model_call(self.run['id'],call['id'],status='succeeded',result={})
+        for message in messages:
+            self.store.finish_message(self.run['id'],message['id'],status='consumed',consumer=call['id'],result='applied')
+        before=self.store.messages(self.run['id'])
+        error=self.denied(lambda:self.prepare())
+        self.assertIn('大小',str(error))
+        self.assertEqual(len(self.store.model_calls(self.run['id'])),1)
+        self.assertEqual(self.store.messages(self.run['id']),before)
+
+    def test_stored_history_corruption_rejects_before_reservation(self):
+        message=self.store.add_message(self.run['id'],dict(request_id=uuid.uuid4().hex,kind='guidance',text='prior guidance'))
+        consumed=self.store.finish_message(self.run['id'],message['id'],status='consumed',consumer='prior-call',result='applied')
+        changes=[dict(run_id='0'*32),dict(kind='unknown'),dict(status='unknown'),dict(id='invalid'),
+            dict(text='bad\x00text'),dict(consumer=None),dict(result=[]),dict(extra='unknown')]
+        for change in changes:
+            with self.subTest(change=change):
+                # Corrupt a fixture's stored JSON; do not replace the real store reader.
+                with sqlite3.connect(self.store.database) as db:
+                    db.execute('UPDATE messages SET record=? WHERE id=?',(json.dumps(dict(consumed,**change)),message['id']))
+                self.denied(lambda:self.prepare())
+                self.assertEqual(self.store.model_calls(self.run['id']),[])
+
+    def test_malformed_stored_history_json_has_safe_workspace_failure(self):
+        message=self.store.add_message(self.run['id'],dict(request_id=uuid.uuid4().hex,kind='guidance',text='prior guidance'))
+        with sqlite3.connect(self.store.database) as db:
+            db.execute('UPDATE messages SET record=? WHERE id=?',('{"text": "synthetic-key',message['id']))
+        try:self.denied(lambda:self.prepare())
+        except ValueError:self.fail('malformed stored JSON escaped the safe WorkspaceError boundary')
+        self.assertEqual(self.store.model_calls(self.run['id']),[])
+
     def test_execute_analysis_guidance_review_dispatch_and_no_fallback(self):
         self.fixture()
         for purpose in ('analyze','guidance'):
@@ -241,6 +313,39 @@ class PlannerTests(unittest.TestCase):
         self.assertIn('unknown-custom-value',excerpt)
         self.assertLessEqual(len(self.api().response_excerpt(b'x'*100000)),4096)
         self.assertNotIn('\x00',self.api().response_excerpt(b'bad\xff\x00text'))
+
+    def test_excerpt_cookie_json_text_forms_mask_whole_value_preserving_neighbors(self):
+        cases=[
+            ('{"Cookie":"sid=synthetic-cookie"}',()),
+            ('{"Set-Cookie":"sid=synthetic-cookie; HttpOnly"}',()),
+            ('Cookie=sid=synthetic-cookie',()),
+            ('{"cOoKiE" : "sid=synthetic-cookie; other=synthetic-other", "note":"visible"}',('"note":"visible"',)),
+            ('{"sEt-CoOkIe" = "sid=synthetic-cookie; HttpOnly", "note":"visible"}',('"note":"visible"',)),
+            ("'Cookie' = 'sid=synthetic-cookie; other=synthetic-other' next prose",('next prose',)),
+            ('Cookie = sid=synthetic-cookie; other=synthetic-other; Path=/\nNext: visible',('Next: visible',)),
+            ('Set-Cookie: sid=synthetic-cookie; HttpOnly; Secure\nNext: visible',('Next: visible',)),
+            ('before Cookie: sid=synthetic-cookie next prose',('before','next prose')),
+            ('Cookie=sid=synthetic-cookie; other=synthetic-other next prose',('next prose',)),
+            ('Cookie=sid="synthetic-cookie with space"; other=synthetic-other next prose',('next prose',)),
+            (json.dumps(dict(Cookie='sid="synthetic-cookie"; other=synthetic-other',note='visible')),('"note": "visible"',)),
+            (json.dumps({'Set-Cookie':'sid="synthetic-cookie"; HttpOnly','note':'visible'}),('"note": "visible"',)),
+            ('{"Cookie":"sid=synthetic-cookie", "Set-Cookie":"other=synthetic-other", "note":"visible"}',('"note":"visible"',)),
+        ]
+        for source,neighbors in cases:
+            with self.subTest(source=source):
+                excerpt=self.api().response_excerpt(source.encode())
+                self.assertNotIn('synthetic-cookie',excerpt)
+                self.assertNotIn('synthetic-other',excerpt)
+                for neighbor in neighbors:self.assertIn(neighbor,excerpt)
+                self.assertLessEqual(len(excerpt),4096)
+
+    def test_excerpt_cookie_value_crossing_inspection_prefix_is_masked(self):
+        for key in ('Cookie','Set-Cookie'):
+            with self.subTest(key=key):
+                source=('{"'+key+'":"sid=synthetic-cookie'+'x'*70000+'"}').encode()
+                excerpt=self.api().response_excerpt(source)
+                self.assertNotIn('synthetic-cookie',excerpt)
+                self.assertLessEqual(len(excerpt),4096)
 
 
 class DNSTests(unittest.TestCase):

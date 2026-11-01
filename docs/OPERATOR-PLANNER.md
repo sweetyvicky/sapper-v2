@@ -24,20 +24,31 @@ output limit 64..8192. Run `policy.expires_at` must allow the entire profile tim
 No-model mode is an explicit engine decision outside these functions.
 
 The two Chat Completions messages contain a strict output schema/instructions and
-one complete JSON context: `role,purpose,draft,scope,policy,guidance,observations,findings`.
+one complete JSON context: `role,purpose,draft,scope,policy,history,guidance,observations,findings`.
 The full frozen draft includes all original assets, goal, context, initial guidance,
 exclusions, budgets and tools. Supplied queued guidance records are included whole.
 All supplied guidance IDs are reserved together; accepted records must belong to
 the run and have kind guidance/status queued, unique UUIDhex IDs and text1..4000.
+Under the same caller lock, `prepare_call` reads `store.messages(run['id'])` and
+includes every stored same-run guidance/status consumed record in `history`, in
+stored order. History is prior operator context, including each original record's
+ID/text/consumer/result; it is not queued input to consume again. Unknown/corrupt
+message records fail safely before reservation. Queued messages enter the prompt
+only through supplied `guidance`; failed messages and consumed non-guidance
+messages do not enter history. No caller-supplied history parameter exists.
 No assets, text, cases or evidence are silently dropped. The request uses exactly
 ModelProfiles serialization (`ensure_ascii=True`, whole body <=1MiB,
 <=64 messages, content <=262144 characters each). Oversize contexts fail with a size
-message before reservation. Local profile/expiry/context errors consume no call.
+message before reservation, including when accumulated history alone is too large.
+No old guidance is silently truncated or dropped to fit. Local profile/expiry/
+context errors consume no call.
 
 After all prechecks, `store.reserve_model_call` reserves the attempt. Returned
 trusted ephemeral dictionary has `call,profile,messages,run,valid_fact_ids,
-observations,findings`, with independent context copies. Never accept this object
-from HTTP or expose it publicly: it contains the complete transient prompt.
+observations,findings,history_message_ids`, with independent context copies.
+`history_message_ids` lists the prior consumed guidance IDs in context order;
+`call.message_ids` contains only supplied current queued guidance IDs. Never accept
+this object from HTTP or expose it publicly: it contains the complete transient prompt.
 
 Call `execute_call` outside the service lock. It invokes `models.complete` exactly
 once with the frozen profile ID and `expected_revision=profile.revision`. The new
@@ -45,17 +56,22 @@ optional ModelProfiles argument accepts None for backward compatibility or a
 strict positive int; mismatch raises safe `ModelError('profile_changed')` before
 reading the key or starting transport. There is no retry/fallback. Result is
 `{'proposal': validated_object, 'metadata': {'profile': public_profile,
-'model': returned_model, 'usage': validated_usage}}`. Raw content and reasoning are
-absent. Plan/analyze/guidance/review select their respective validators; guidance
-uses the analysis schema.
+'model': returned_model, 'usage': validated_usage,
+'history_message_ids': prior_consumed_guidance_ids}}`. Existing profile/model/usage
+semantics are unchanged. History IDs record context usage separately from the
+original consumer; this module never changes prior consumption records. Raw content
+and reasoning are absent. Plan/analyze/guidance/review select their respective
+validators; guidance uses the analysis schema.
 
 After transport, the engine must reacquire its lock and recheck run state, current
 facts, exact scope, provenance and persistence limits before applying proposals.
 The engine owns action IDs/limits, derived coverage assets, candidate attribution,
 source events, `finish_model_call` and exact-call `finish_message` acknowledgement.
 Only acknowledge consumed after safe application; failure marks the call and its
-participating messages failed. Crash reservations remain uncertain without retry
-or refund. The planner performs no result persistence.
+participating current queued messages failed. Preserve returned history metadata
+when recording actual context usage; never acknowledge or reserve those IDs again.
+Crash reservations remain uncertain without retry or refund. The planner performs
+no result persistence.
 
 **Persistence size:** WorkspaceStore call results are <=32768 bytes, smaller than
 accepted model proposals. The engine must choose a bounded result shape and
@@ -138,9 +154,14 @@ policy pins. It skips excluded origins and deduplicates origin/hostname resoluti
 `response_excerpt(body: bytes)` inspects a bounded 65536-byte prefix, replaces
 invalid UTF-8/unsafe controls and masks common Authorization/Bearer, Cookie/
 Set-Cookie, API key, password, secret, access/refresh/session/CSRF token text/JSON
-forms before the final <=4096-character cut. This is common-pattern masking,
-not universal secret/PII redaction. Arbitrary sensitive prose and unusual encodings
-can remain. Engine/views own receipt verification and protected body selection.
+forms before the final <=4096-character cut. Cookie patterns include quoted
+Cookie/Set-Cookie keys with colon/equals separators, escaped quoted values and
+semicolon-separated plain cookie pairs/attributes. Adjacent
+JSON fields, following prose and next lines remain available; values extending
+past the bounded inspection prefix are masked through that prefix.
+This is common-pattern masking, not universal secret/PII redaction.
+Arbitrary sensitive prose and unusual encodings can remain. Engine/views own
+receipt verification and protected body selection.
 
 ## Offline verification boundary
 
