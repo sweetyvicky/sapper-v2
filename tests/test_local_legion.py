@@ -63,3 +63,21 @@ class LocalLegionTests(unittest.TestCase):
                 self.assertNotEqual(self.invoke('exercise', state, artifacts, '--pace-seconds', pace).returncode, 0)
             self.assertFalse((state/'exercise-started.json').exists())
 
+
+    def test_export_failure_preserves_state_without_success_and_closes_fixture(self):
+        self.assertTrue(ENTRY.is_file(), 'persistent scenario entrypoint is missing')
+        with tempfile.TemporaryDirectory() as directory:
+            state, artifacts = Path(directory)/'state', Path(directory)/'artifacts'
+            self.assertEqual(self.invoke('prepare', state, artifacts).returncode, 0)
+            (artifacts/'status.json').mkdir()
+            failed = self.invoke('exercise', state, artifacts, '--pace-seconds', '0')
+            self.assertNotEqual(failed.returncode, 0)
+            self.assertFalse(json.loads(failed.stdout)['exercise_complete'])
+            self.assertTrue((state/'exercise-started.json').is_file())
+            self.assertTrue((state/'ledger.sqlite').is_file())
+            self.assertFalse((artifacts/'summary.json').exists(), 'failure must not leave a success summary')
+            with socket.socket() as probe:
+                self.assertNotEqual(probe.connect_ex(('127.0.0.1',18080)), 0)
+            with socket.socket() as probe:
+                probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                probe.bind(('127.0.0.1',18080))

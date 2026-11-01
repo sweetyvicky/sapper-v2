@@ -20,7 +20,7 @@ Open 从当前查看器自身日志读取带片段凭据的完整 URL。这个�
 
 Stop 只删除 ID、完整名称、owner 标签及 run 标签均匹配的本部署资源。全部状态、产物及本地诊断日志保留（日志可能含私密地址）。演练退出后仍可 Stop/Status/Open。Stop 后 Start 打开原有状态的查看器，不重跑已经消费的演练。Replay 只停止当前自有实例，创建新的运行、策略、账本及预算，不重置旧预算，不覆盖旧记录。演练即使中断也算已启动，需要 Replay 才能重新演练。不会注册系统自启动。
 
-`deployment.json` 记录当前运行，`owner.txt` 是持久资源归属标记；文件锁串行化管理操作。`releases/<commit>/` 只从 Git 已提交源代码提取。`runs/<run-id>/source.json` 记录提交、tree 及固定镜像。每次运行有独立的 `state/` 和 `artifacts/`，后者包括 `summary.json`、安全快照 `status.json` 和由实际记录生成的独立 `coverage-demo.html`。请保留部署目录及归属信息，以便安全管理；它是可信操作员控制的存储。
+`deployment.json` 记录当前运行，`owner.txt` 是持久资源归属标记；文件锁串行化管理操作。`releases/<commit>-<run-id>/` 先在独立暂存目录完整提取 Git 已提交源代码，再发布，并保存逐文件 SHA256 校验记录。每次 Start（包括停止后重启）都会验证完整性；损坏时保留状态并拒绝启动，可用 Replay 创建新快照。`runs/<run-id>/source.json` 记录提交、tree 及固定镜像。每次运行有独立的 `state/` 和 `artifacts/`，后者包括 `summary.json`、安全快照 `status.json` 和由实际记录生成的独立 `coverage-demo.html`。请保留部署目录及归属信息，以便安全管理；它是可信操作员控制的存储。
 
 全部容器限制为 2 CPU、512 MiB 内存、128 PID，移除全部 capabilities，启用 no-new-privileges；根文件系统和源代码只读，`/tmp` 为 128 MiB tmpfs。固定镜像：`python:3.12-slim@sha256:aa943ce411423c7582288f18707ff66eddcbaeb510502d747a72aeb34f30d159`。不挂载 Docker socket，不使用 host network。prepare/exercise 使用 `--network none`，仅专用 `/state` 和 `/artifacts` 可写。查看器以只读方式挂载 `/state`，默认只发布 `127.0.0.1:8765:8765`。无论 Windows 路径是什么，容器内部状态路径始终是 `/state`。演练 fixture 只绑定隔离容器内部的 `127.0.0.1:18080`，没有用户目标参数。
 
@@ -34,3 +34,4 @@ python examples/pentest/local_legion.py exercise --state /state --artifacts /art
 ```
 
 prepare 只能初始化全新空状态，每个 exercise 只能启动一次，包括失败。需要本地已有固定镜像，或允许 Docker 正常拉取。脚本不导入密码、凭据或环境密钥。
+

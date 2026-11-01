@@ -96,17 +96,26 @@ function Container-Args([string]$name, [string]$network, [bool]$readOnlyState) {
 function Create-Run {
     $version = (& git -C $source rev-parse HEAD).Trim()
     if ($LASTEXITCODE -ne 0) { throw 'Committed source is required.' }
-    $tree = (& git -C $source rev-parse 'HEAD^{tree}').Trim()
-    $release = Join-Path $base ('releases/'+$version)
-    if (-not (Test-Path -LiteralPath $release)) {
-        $archive = Join-Path $base ('source-'+[guid]::NewGuid().ToString('N')+'.zip')
-        & git -C $source archive --format=zip --output $archive $version
-        if ($LASTEXITCODE -ne 0) { throw 'Committed source snapshot failed.' }
-        Expand-Archive -LiteralPath $archive -DestinationPath $release
-        Remove-Item -LiteralPath $archive
-    }
-    if (-not (Test-Path -LiteralPath (Join-Path $release 'examples/pentest/local_legion.py'))) { throw 'Commit the scenario before Start.' }
+    $tree = (& git -C $source rev-parse ($version+'^{tree}')).Trim()
+    if ($LASTEXITCODE -ne 0) { throw '无法读取已捕获提交的源代码 tree。' }
     $run = [guid]::NewGuid().ToString('N')
+    $release = Join-Path $base ('releases/'+$version+'-'+$run)
+    $staging = $release+'.pending'
+    $archive = Join-Path $base ('source-'+$run+'.zip')
+    & git -C $source archive --format=zip --output $archive $version
+    if ($LASTEXITCODE -ne 0) { throw '已提交源代码快照失败。' }
+    # Unique staging is never reused after interruption; preserve it for diagnosis.
+    Expand-Archive -LiteralPath $archive -DestinationPath $staging
+    if (-not (Test-Path -LiteralPath (Join-Path $staging 'examples/pentest/local_legion.py'))) { throw '请先提交演练入口。' }
+    $hashes = @{}
+    Get-ChildItem -LiteralPath $staging -File -Recurse -Force | ForEach-Object {
+        $relative = [IO.Path]::GetRelativePath($staging,$_.FullName)
+        $hashes[$relative] = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash
+    }
+    Move-Item -LiteralPath $staging -Destination $release
+    @{ version=$version; tree=$tree; files=$hashes } | ConvertTo-Json -Depth 5 |
+        Set-Content -LiteralPath ($release+'.integrity.json') -Encoding utf8
+    Remove-Item -LiteralPath $archive
     $runRoot = Join-Path $base ('runs/'+$run)
     $state = Join-Path $runRoot 'state'
     $artifacts = Join-Path $runRoot 'artifacts'
@@ -124,7 +133,23 @@ function Create-Run {
     $prepared = Inspect-Owned $script:manifest.prepare 'container'
     if ($prepared.State.ExitCode -ne 0) { throw 'Preparation failed; see private prepare.log.' }
 }
+function Validate-Release {
+    $release=$script:manifest.release
+    $proofPath=$release+'.integrity.json'
+    if (-not (Test-Path -LiteralPath $proofPath -PathType Leaf)) { throw '缺少完整源代码校验记录；请 Replay 创建新快照。' }
+    $proof=Get-Content -LiteralPath $proofPath -Raw | ConvertFrom-Json -AsHashtable
+    if ($proof.version -ne $script:manifest.version -or $proof.tree -ne $script:manifest.tree) { throw '源代码版本校验失败。' }
+    $actual=@(Get-ChildItem -LiteralPath $release -File -Recurse -Force)
+    if ($actual.Count -ne $proof.files.Count) { throw '源代码文件数量不匹配；保留状态，请使用 Replay。' }
+    foreach ($file in $actual) {
+        $relative=[IO.Path]::GetRelativePath($release,$file.FullName)
+        if (-not $proof.files.ContainsKey($relative) -or (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash -ne $proof.files[$relative]) {
+            throw '源代码完整性校验失败；保留状态，请使用 Replay。'
+        }
+    }
+}
 function Start-Run {
+    Validate-Release
     $prefix = 'sapper-local-'+$script:owner.Substring(0,8)+'-'+$script:manifest.runId.Substring(0,8)
     $networkName = $prefix+'-viewer-net'
     $network = Docker @('network','create','--driver','bridge','--label',('sapper.local.owner='+$script:owner),
@@ -181,6 +206,7 @@ try {
         { $_ -in 'Start','Replay' } {
             try {
                 if ($Action -eq 'Replay' -and $script:manifest) { Stop-Owned; $script:manifest=$null }
+                if ($script:manifest) { Validate-Release }
                 if ($script:manifest -and (Viewer-Url)) {
                     $url=Viewer-Url; Write-Output $url
                     if (-not $NoBrowser) { Start-Process $url }
