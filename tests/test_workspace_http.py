@@ -178,7 +178,11 @@ class HTTPTests(unittest.TestCase):
             self.assertIn(self.request('GET',path)[0],(400,404),path)
         for method in ('HEAD','PUT','DELETE','OPTIONS','PATCH','TRACE','CONNECT'):
             self.assertEqual(self.request(method,'/api/tasks')[0],405,method)
-        self.assertEqual(self.request('POST','/api/assets/preview',raw=b'x'*(MAX_BODY+1))[0],413)
+        # Length is rejected before reading a body; do not race sendall against close.
+        status, value, _ = self.request('POST','/api/assets/preview',raw=b'',
+                                      headers={'Content-Length':str(MAX_BODY+1)})
+        self.assertEqual(status,413)
+        self.assertEqual(value,{'error':{'code':'payload_too_large','message':'请求超过一兆字节限制'}})
         self.assertEqual(self.hits,[])
 
     def test_static_allowlist_headers_and_safe_errors(self):
@@ -191,7 +195,7 @@ class HTTPTests(unittest.TestCase):
         self.assertEqual(headers['Cache-Control'],'no-store')
         self.assertEqual(headers['Referrer-Policy'],'no-referrer')
         self.assertEqual(headers['X-Content-Type-Options'],'nosniff')
-        for path in ('/app.js','/api.js','/task_editor.js','/run_view.js','/models_view.js','/findings_view.js','/app.css'):
+        for path in ('/app.js','/api.js','/task_editor.js','/run_view.js','/models_view.js','/findings_view.js','/ui.js','/coverage_view.js','/report_view.js','/app.css'):
             self.assertEqual(self.request('GET',path)[0],200 if (adapter.WEB/path[1:]).is_file() else 404)
         self.session()
         status,error,_=self.request('POST','/api/models',dict(profile=dict(api_key='synthetic-key'),unknown='synthetic-key'))

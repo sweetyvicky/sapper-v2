@@ -113,7 +113,7 @@ coverage outcome 只能为 completed/not_applicable，必须遵守人工检查�
 
 报告 Header CSP 只有 `base-uri 'none'; form-action 'none'; frame-ancestors 'self'`（预览）或 `'none'`（下载）。底层报告自己的 meta CSP 仍生效；原始报告字节完整保留，未来可信静态 CSS 哈希不会被额外 default-src/style-src Header 覆盖。不使用 unsafe-inline。预览 iframe 使用 sandbox，不允许脚本、表单或弹窗；仅在同源认证加载确需时允许 allow-same-origin。
 
-无会话可读取的页面仅为固定打包的 `/`、`/app.css`、`/app.js`、`/api.js`、`/task_editor.js`、`/run_view.js`、`/models_view.js`、`/findings_view.js`。它们映射到独立 operator_web 包目录的确定文件名，没有参数驱动的路径。UI 尚未打包时根页面明确显示 backend ready；其余缺失文件返回 404，不提供占位工作流。所有任务、模型、报告、会话状态 API 仍需认证。
+无会话可读取的页面仅为固定打包的 `/`、`/app.css`、`/app.js`、`/api.js`、`/task_editor.js`、`/run_view.js`、`/models_view.js`、`/findings_view.js`、`/ui.js`、`/coverage_view.js`、`/report_view.js`。它们映射到独立 operator_web 包目录的确定文件名，没有参数驱动的路径。UI 尚未打包时根页面明确显示 backend ready；其余缺失文件返回 404，不提供占位工作流。所有任务、模型、报告、会话状态 API 仍需认证。
 
 ## 线程、关闭和所有权
 
