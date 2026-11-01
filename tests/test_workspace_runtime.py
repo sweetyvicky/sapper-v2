@@ -286,8 +286,18 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(self.model_requests[-1][1]['guidance'][0]['text'],msg['text'])
         self.approve(snap); self.ws.start(rid); self.ws.wait(rid,timeout=10)
         self.assertEqual(len(self.hits),2)
+        actual=self.ws.snapshot(rid)
+        diagnostic=dict(status=actual['run']['status'],stop_reason=actual['run']['stop_reason'],
+            tasks=[{k:t.get(k) for k in ('state','receipt_state','receipt')} for t in actual['runtime']['tasks']],
+            calls=[{k:c.get(k) for k in ('id','role','purpose','status','result')} for c in actual['model_calls']],
+            requests=[dict(model=m,history_ids=[h['id'] for h in c.get('history',[])],
+                guidance_ids=[h['id'] for h in c.get('guidance',[])]) for m,c in self.model_requests])
+        self.assertEqual(actual['plan']['actions'][-1]['state'],'succeeded',diagnostic)
+        self.assertEqual(actual['model_calls'][-1]['purpose'],'analyze',diagnostic)
+        self.assertEqual(actual['model_calls'][-1]['status'],'succeeded',diagnostic)
+        self.assertEqual(len(self.model_requests),4,diagnostic)
         context=self.model_requests[-1][1]
-        self.assertEqual(context['history'][0]['id'],queued['id'])
+        self.assertEqual([h['id'] for h in context['history']],[queued['id']],diagnostic)
         self.assertEqual(self.ws.snapshot(rid)['model_calls'][-1]['result']['history_message_ids'],[queued['id']])
         again=dict(request_id=uuid.uuid4().hex,kind='guidance',text='Observe /new again')
         self.ws.message(rid,again); self.ws.wait(rid,timeout=10)
@@ -475,6 +485,39 @@ class WorkspaceTests(unittest.TestCase):
         run=self.ws.prepare(draft['id'],1); self.ws.wait(run['id'],timeout=10)
         snap=self.ws.snapshot(run['id'])
         self.assertEqual(snap['policy']['expires_at'],run['created_at']+60)
+
+    def test_reports_preserve_frozen_authorization_and_verified_invalidation(self):
+        now=[time.time()]
+        self.ws.close(); self.ws=Workspace(self.root,clock=lambda:now[0]); self.addCleanup(self.ws.close)
+        snap=self.execute(self.prepare(expiry_seconds=60)); rid=snap['run']['id']
+        fact=snap['runtime']['evidence']['facts'][0]
+        self.ws.create_finding(rid,dict(fact_id=fact['id'],title='Case',severity='info',reporter='operator',description='D',impact='I',reproduction='R',remediation='M',cwe='',operator_note=''))
+        draft=self.ws.store.get_draft(snap['run']['draft_id'])
+        self.ws.store.save_draft(dict(draft['data'],expiry_seconds=120,max_request_seconds=9),draft_id=draft['id'],expected_revision=draft['revision'])
+        self.ws.invalidate_fact(rid,fact['id'],actor='fixture <actor>',reason='Withdraw <basis>')
+        now[0]=snap['policy']['expires_at']+1
+        report=json.loads(self.ws.report(rid,'json'))
+        self.assertEqual(report['authorization_context']['expires_at'],snap['policy']['expires_at'])
+        self.assertEqual(report['authorization_context']['max_request_seconds'],4)
+        self.assertEqual(report['run']['created_at'],snap['run']['created_at'])
+        self.assertEqual(report['run']['draft_revision'],1)
+        support=report['findings'][0]['supporting_facts'][0]
+        self.assertIn('policy expired',support['invalid_reasons'])
+        self.assertIn('fact revoked',support['invalid_reasons'])
+        self.assertEqual(support['revocations'][0]['actor'],'fixture <actor>')
+        for fmt in ('html','markdown'):
+            text=self.ws.report(rid,fmt)
+            for expected in ('policy expired','fact revoked','Withdraw &lt;basis&gt;','UTC','单次请求时限','冻结草稿版本'):
+                self.assertIn(expected,text)
+            self.assertNotIn('fixture <actor>',text)
+
+    def test_report_without_established_policy_keeps_frozen_limits(self):
+        draft=self.draft()
+        run=self.ws.store.create_run(draft['id'],draft['revision'])
+        report=json.loads(self.ws.report(run['id'],'json'))
+        self.assertEqual(report['authorization_context']['state'],'not_established')
+        self.assertIsNone(report['authorization_context']['expires_at'])
+        self.assertEqual(report['authorization_context']['max_response_bytes'],1024)
 
     def test_no_model_manual_assessment_and_narrative_optimistic_update(self):
         snap=self.execute(self.prepare()); rid=snap['run']['id']; fact=snap['runtime']['evidence']['facts'][0]

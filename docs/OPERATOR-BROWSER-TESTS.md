@@ -190,3 +190,34 @@ deployment are part of this fixture slice.
 - `operator-workspace-paused-fixes-prepare.js` → helper **Arm** → `operator-workspace-paused-fixes-start.js` → helper **Release** → `operator-workspace-paused-fixes-resume.js`：新建 slow-first、beta 未批准的轮次，只批准 slow；暂停后主按钮明确批准 beta 并继续，验证实际 `/approve` → `/resume`、无 `/start`、无重复回执。开始片段完成后及时 Release，慢请求屏障最长 25 秒。
 
 调用形式：`npx --yes --package @playwright/cli@0.1.23 playwright-cli -s=<session> run-code --filename tests/browser/<上述文件名>`。暂停的部分成功分支可在 prepare 片段之前执行 `run-code 'async (page) => { await page.evaluate(() => globalThis.__operatorReviewPartialFailure = true); }'`。该内存标记只选择测试填表值，不修改 API 或运行状态；prepare 会通过可见表单将请求预算明确设为 1。slow 用尽额度后，beta 批准会持久保存，而随后继续被真实额度校验拒绝；验证界面同时确认批准成功和执行失败、刷新实际状态且无 beta 请求。该新轮次保持暂停，不能自动继续既有轮次。
+
+
+## Final correction branches
+
+The owned `/slow` barrier holds the first armed request and concurrent `/slow`
+requests while it remains pending, each for at most 25 seconds or until Release.
+A waiter count keeps pending true until all held requests leave. Originally only
+the first request was held; joining concurrent requests enables a real two-active
+service capacity rejection without changing production capacity or request limits.
+The fixture contract test checks both slots and rejects a third prepare with no run.
+
+After Bootstrap, run these real browser snippets serially with the same session
+using `npx --yes --package @playwright/cli@0.1.23 playwright-cli -s=<session> run-code --filename <path>`:
+
+1. `tests/browser/operator-workspace-final-rich-csv.js` creates a labelled draft,
+   imports rich CSV, saves, reopens, previews again and verifies persisted metadata.
+2. `tests/browser/operator-workspace-final-terminal.js` uses that draft, explicitly
+   approves/executes its one loopback observation, creates a synthetic finding,
+   proves consumed record-only guidance and pending retest, cancels, and proves
+   failed composer/retest acknowledgements with retained inputs.
+3. `tests/browser/operator-workspace-final-capacity-prepare.js` creates two separate
+   prepared basic runs and leaves a new editor ready. Arm the owned fixture, then
+   immediately run `tests/browser/operator-workspace-final-capacity-test.js`.
+   It explicitly starts both held loopback actions and proves new/existing draft
+   partial success and subsequent saves at correct identity/revision. Release the
+   fixture afterwards, including on test failure; preserve runs and charged budgets.
+
+These snippets never mock fetch, invoke real providers or reset existing state.
+Keep raw CLI output private as described above. Expected HTTP 409 capacity rejections
+and terminal failed-message envelopes are assertions of product behavior, not failed
+acceptance. The parent installed-source/full-matrix gate remains separate.

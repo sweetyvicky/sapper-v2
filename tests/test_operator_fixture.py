@@ -225,6 +225,23 @@ class OperatorFixtureTests(unittest.TestCase):
         self.assertEqual(len(emitted), len(set(emitted)))
         self.assertNotIn(SYNTHETIC_KEY, json.dumps(contexts))
 
+    def test_concurrent_slow_requests_hold_both_capacity_slots(self):
+        one=self.prepare(('/slow',)); two=self.prepare(('/slow',))
+        self.fixture.control('arm')
+        try:
+            for snap in (one,two):
+                prefix='/api/runs/'+snap['run']['id']
+                self.api('POST',prefix+'/approve',dict(plan_revision=snap['plan']['revision'],action_ids=[snap['plan']['actions'][0]['id']],actor='fixture'))
+                self.api('POST',prefix+'/start',{})
+            deadline=time.monotonic()+2
+            while getattr(self.fixture,'_slow_waiters',0)!=2 and time.monotonic()<deadline: time.sleep(.02)
+            self.assertEqual(getattr(self.fixture,'_slow_waiters',0),2)
+            self.api('POST','/api/tasks/'+one['run']['draft_id']+'/runs',dict(expected_revision=1),409)
+            self.assertEqual(len(self.fixture.ws.store.list_runs()),2)
+        finally: self.fixture.control('release')
+        for snap in (one,two): self.settle(snap['run']['id'])
+        self.assertFalse(self.fixture.metadata()['barrier']['pending'])
+
     def test_barrier_failure_and_restart_keep_counts_without_replay(self):
         self.fixture.control('arm')
         snap = self.prepare(('/slow',)); rid = snap['run']['id']; prefix='/api/runs/'+rid

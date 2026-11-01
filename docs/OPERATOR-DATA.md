@@ -52,3 +52,23 @@ Narrative presentation uses named scope fields (`origins`, `pinned`, `excluded_o
 HTML embeds only trusted static CSS authorized by its exact UTF-8 SHA256 style-src in meta CSP; default-src remains none. A4 print styles wrap Chinese prose, URLs, hashes and excerpts, permit long cases to span pages and repeat table headings. No scripts, remote assets, active evidence links or unsafe-inline are added. Markdown escapes literal prose including case titles. Common secret-key guards, strict JSON/32MiB limits and JSON export fidelity remain unchanged.
 
 Evidence appendices contain **case-linked evidence only**, because the existing report snapshot has no public runtime/observations list. Historical successful action counts do not claim all execution receipts are attached. Independent review evidence references without a matching attached record are explicitly marked reference-only/current validity unknown; no receipt content or validity is invented. Historical model suggestions retain their independent `evidence_current_valid` flag separately. Evidence excerpts use 内容摘录（已隐藏常见敏感字段）, at most4096 characters, may be incomplete and do not constitute complete HTTP traffic or universal redaction. Stale means current evidence invalid, not fixed/nonexistent; specific available reasons and historical reviews remain visible. Events are bounded recent records rather than complete audit history.
+
+
+### Compatible frozen authorization and provenance fields
+
+Reports retain the existing public fields and add `run.created_at`, `run.draft_revision`
+and `authorization_context:{state,expires_at,expiry_seconds,max_request_seconds,max_response_bytes}`.
+These values come only from the stored run's frozen draft and established policy.
+If no policy was established, `state` is `not_established` and `expires_at` is null;
+no expiry is inferred from draft duration. Narrative timestamps use UTC, including
+expiry and revocation times. Limits remain present when there are no plan actions.
+
+Each finding adds `supporting_facts` (the backing fact and transitive dependencies,
+with named id/valid/invalid_reasons/revocations/depends_on/evidence_ids/expires_at)
+and `supporting_evidence` (only linked evidence id/valid/invalid_reasons/revocations).
+Reasons and revocation actor/reason/time are copied from the verified current core
+snapshot; they are distinct from historical finding reviews. Unrelated facts and
+receipts, credentials, raw runtime and response bodies are not added. This compatible
+public projection does not change validity or expiry logic. JSON faithfully exports
+the extended public projection; HTML/Markdown render its named fields with literal
+escaping, the existing size bound and the same static-style CSP.

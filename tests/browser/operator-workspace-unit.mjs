@@ -574,6 +574,349 @@ await regression(
     );
   },
 );
+
+for (const status of ["queued", "consumed", "failed"]) {
+  await regression("Final terminal retest " + status, async () => {
+    let inspected;
+    const host = root(),
+      view = findingsView(
+        host,
+        "run",
+        async () => {},
+        (id) => {
+          inspected = id;
+        },
+      );
+    view.update({
+      findings: [finding()],
+      observations: [],
+      review_suggestions: [],
+      runtime: { tasks: [] },
+    });
+    globalThis.fetch = async () =>
+      json({
+        message: {
+          id: "durable-message",
+          status,
+          consumer: "controller",
+          result: "Actual safe effect",
+        },
+      });
+    const text = control(host, "复测指导");
+    text.value = "Keep correction";
+    await btn(host, "请求复测并规划").emit("click");
+    assert.match(host.textContent, /durable-message/);
+    await btn(host, "查看当前消息记录").emit("click");
+    assert.equal(inspected, "durable-message");
+    if (status !== "queued") {
+      assert.match(host.textContent, /Actual safe effect/);
+      assert.ok(!host.textContent.includes("复测消息已排队"));
+    }
+    if (status === "failed") {
+      assert.equal(text.value, "Keep correction");
+      assert.ok(
+        descendants(host).some(
+          (n) =>
+            n.className.includes("error") &&
+            n.textContent.includes("Actual safe effect"),
+        ),
+      );
+    }
+  });
+}
+for (const existing of [false, true])
+  await regression(
+    "Final saved draft survives plan rejection " + existing,
+    async () => {
+      const host = root(),
+        posts = [];
+      let revision = existing ? 1 : 0;
+      const data = {
+        name: "Synthetic",
+        goal: "Observe",
+        assets: [
+          {
+            id: "asset_a",
+            target: "https://synthetic.invalid:443/",
+            name: "Payroll",
+            group: "Finance",
+            notes: 'Unicode 财务, "notes"',
+            assumed_scheme: true,
+          },
+        ],
+      };
+      globalThis.fetch = async (path, opts) => {
+        if (path === "/api/models") return json({ profiles: [] });
+        if (opts.method !== "POST")
+          return json({ task: { id: "draft", revision, data } });
+        const body = JSON.parse(opts.body);
+        posts.push({ path, body });
+        if (path.endsWith("/runs"))
+          return {
+            ok: false,
+            json: async () => ({
+              error: { message: "Current capacity unavailable" },
+            }),
+          };
+        if (path.endsWith("/preview"))
+          return json({
+            preview: {
+              assets: [
+                {
+                  ...data.assets[0],
+                  name: "https://synthetic.invalid:443/",
+                  group: "",
+                  notes: "",
+                  assumed_scheme: false,
+                },
+              ],
+              counts: { valid: 1, invalid: 0, duplicates: 0 },
+              errors: [],
+              duplicates: [],
+            },
+          });
+        if (revision && body.expected_revision !== revision)
+          return {
+            ok: false,
+            json: async () => ({ error: { message: "Revision conflict" } }),
+          };
+        return json({ task: { id: "draft", revision: ++revision } });
+      };
+      await taskEditor(host, existing ? "draft" : null, () => {});
+      if (!existing) {
+        control(host, "批量资产（每行一个网址、域名或 IP）").value =
+          data.assets[0].target;
+        await btn(host, "预览并检查资产").emit("click");
+      }
+      await btn(host, "保存并规划新一轮").emit("click");
+      assert.match(host.textContent, /草稿已保存/);
+      assert.ok(host.textContent.includes(`当前草稿版本 ${existing ? 2 : 1}`));
+      assert.match(host.textContent, /Current capacity unavailable/);
+      await btn(host, "保存草稿").emit("click");
+      const saves = posts.filter(
+        (p) => !p.path.endsWith("/runs") && !p.path.endsWith("/preview"),
+      );
+      assert.equal(saves[1].path, "/api/tasks/draft");
+      assert.equal(saves[1].body.expected_revision, existing ? 2 : 1);
+    },
+  );
+await regression(
+  "Final retained line targets preserve CSV metadata and provenance",
+  async () => {
+    const host = root();
+    let saved;
+    const original = {
+      id: "asset_a",
+      target: "https://synthetic.invalid:443/",
+      name: "Payroll",
+      group: "Finance",
+      notes: '财务, "notes"\nsecond line',
+      assumed_scheme: true,
+    };
+    globalThis.fetch = async (path, opts) => {
+      if (path === "/api/models") return json({ profiles: [] });
+      if (opts.method !== "POST")
+        return json({
+          task: { id: "draft", revision: 1, data: { assets: [original] } },
+        });
+      if (path.endsWith("/preview"))
+        return json({
+          preview: {
+            assets: [
+              {
+                ...original,
+                name: original.target,
+                group: "",
+                notes: "",
+                assumed_scheme: false,
+              },
+            ],
+            counts: { valid: 1, invalid: 0, duplicates: 0 },
+            errors: [],
+            duplicates: [],
+          },
+        });
+      saved = JSON.parse(opts.body).data;
+      return json({ task: { id: "draft", revision: 2 } });
+    };
+    await taskEditor(host, "draft", () => {});
+    await btn(host, "预览并检查资产").emit("click");
+    await btn(host, "保存草稿").emit("click");
+    assert.deepEqual(saved.assets, [original]);
+  },
+);
+
+for (const status of ["queued", "consumed", "failed"])
+  await regression(
+    "Final composer terminal acknowledgement " + status,
+    async () => {
+      const host = root(),
+        snapshot = {
+          run: { draft_id: "draft", status: "completed" },
+          draft: { assets: [], exclusions: [] },
+          plan: { revision: 1, actions: [] },
+          messages: [],
+          model_calls: [],
+          events: [],
+          findings: [],
+          observations: [],
+          review_suggestions: [],
+          coverage: { assets: [], checks: [], cells: [] },
+          runtime: { tasks: [] },
+        };
+      globalThis.fetch = async (path, opts) => {
+        if (opts.method === "POST")
+          return json({
+            message: {
+              id: "durable-composer",
+              status,
+              consumer: "operator-record",
+              result: "Recorded only; no Commander model configured.",
+            },
+          });
+        if (path === "/api/models") return json({ profiles: [] });
+        if (path === "/api/tasks/draft")
+          return json({
+            task: { id: "draft", revision: 1, data: { name: "Synthetic" } },
+            runs: [{ id: "run" }],
+          });
+        return json({ snapshot });
+      };
+      const dispose = await runView(host, "draft", "run", () => {});
+      try {
+        const text = control(host, "给本轮的人工指导");
+        text.value = "Correction";
+        await btn(host, "发送并重新规划").emit("click");
+        assert.match(host.textContent, /durable-composer/);
+        if (status !== "queued")
+          assert.match(host.textContent, /Recorded only/);
+        assert.equal(text.value, status === "failed" ? "Correction" : "");
+        if (status === "failed")
+          assert.ok(
+            descendants(host).some(
+              (n) =>
+                n.className.includes("error") &&
+                n.textContent.includes("Recorded only"),
+            ),
+          );
+      } finally {
+        dispose();
+      }
+    },
+  );
+await regression(
+  "Final save operations share one in-flight submission",
+  async () => {
+    const host = root();
+    let resolveSave;
+    let posts = 0;
+    globalThis.fetch = async (path, opts) => {
+      if (path === "/api/models") return json({ profiles: [] });
+      if (opts.method !== "POST")
+        return json({
+          task: {
+            id: "draft",
+            revision: 1,
+            data: { assets: [{ target: "https://synthetic.invalid/" }] },
+          },
+        });
+      posts++;
+      return await new Promise((resolve) => {
+        resolveSave = resolve;
+      });
+    };
+    await taskEditor(host, "draft", () => {});
+    const pending = btn(host, "保存草稿").emit("click");
+    await btn(host, "保存并规划新一轮").emit("click");
+    assert.equal(posts, 1);
+    assert.ok(
+      btn(host, "保存草稿").disabled && btn(host, "保存并规划新一轮").disabled,
+    );
+    resolveSave(json({ task: { id: "draft", revision: 2 } }));
+    await pending;
+  },
+);
+
+for (const csv of [false, true])
+  await regression("Final edited targets metadata policy " + csv, async () => {
+    const host = root();
+    let saved;
+    const original = {
+      id: "old",
+      target: "https://synthetic.invalid:443/",
+      name: "Payroll",
+      group: "Finance",
+      notes: '财务, "notes"',
+      assumed_scheme: true,
+    };
+    const added = {
+      id: "new",
+      target: "https://new.invalid:443/",
+      name: "New",
+      group: "New group",
+      notes: "",
+      assumed_scheme: true,
+    };
+    globalThis.fetch = async (path, opts) => {
+      if (path === "/api/models") return json({ profiles: [] });
+      if (opts.method !== "POST")
+        return json({
+          task: {
+            id: "draft",
+            revision: 1,
+            data: {
+              assets: [
+                original,
+                {
+                  ...added,
+                  id: "removed",
+                  target: "https://removed.invalid:443/",
+                },
+              ],
+            },
+          },
+        });
+      if (path.endsWith("/preview"))
+        return json({
+          preview: {
+            assets: [
+              {
+                ...original,
+                name: "Explicit replacement",
+                group: "",
+                notes: "",
+                assumed_scheme: false,
+              },
+              added,
+            ],
+            counts: { valid: 2, invalid: 0, duplicates: 0 },
+            errors: [],
+            duplicates: [],
+          },
+        });
+      saved = JSON.parse(opts.body).data;
+      return json({ task: { id: "draft", revision: 2 } });
+    };
+    await taskEditor(host, "draft", () => {});
+    const input = control(host, "批量资产（每行一个网址、域名或 IP）");
+    input.value = "edited";
+    await input.emit("input");
+    if (csv) {
+      const format = control(host, "导入格式");
+      format.value = "csv";
+      await format.emit("change");
+    }
+    await btn(host, "预览并检查资产").emit("click");
+    await btn(host, "保存草稿").emit("click");
+    assert.equal(saved.assets.length, 2);
+    assert.deepEqual(saved.assets[1], added);
+    assert.deepEqual(
+      saved.assets[0],
+      csv
+        ? { ...original, name: "Explicit replacement", group: "", notes: "" }
+        : original,
+    );
+  });
 if (failures.length)
   throw new Error(
     `${failures.length} focused regressions failed: ${failures.join("; ")}`,

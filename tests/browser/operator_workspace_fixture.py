@@ -60,6 +60,7 @@ class OperatorFixture:
         self.data = dict(
             version=1, generation=0, target_hits=[], model_calls=[], emitted_fact_ids=[], guided_run_ids=[])
         self.barrier = dict(armed=False, pending=False)
+        self._slow_waiters = 0
         self.fail_next = None
         self.last_control = None
 
@@ -135,15 +136,18 @@ class OperatorFixture:
                 path = self.path if self.path in PATHS else '__rejected__'
                 status = 503 if path == '/failure' else 404 if path == '__rejected__' else 200
                 with owner.lock:
-                    wait = path == '/slow' and owner.barrier['armed']
-                    if wait: owner.barrier.update(armed=False, pending=True)
+                    wait = path == '/slow' and (owner.barrier['armed'] or owner.barrier['pending'])
+                    if wait:
+                        owner._slow_waiters += 1
+                        owner.barrier.update(armed=False, pending=True)
                     owner.data['target_hits'].append(dict(sequence=len(owner.data['target_hits'])+1,
                         generation=owner.data['generation'], method=self.command, path=path, status=status, at=time.time()))
                     owner.persist()
                 if wait:
                     owner.release.wait(25)
                     with owner.lock:
-                        owner.barrier['pending'] = False; owner.persist()
+                        owner._slow_waiters -= 1
+                        owner.barrier['pending'] = bool(owner._slow_waiters); owner.persist()
                 body = (b'SYNTHETIC EXPOSURE MARKER: training fixture only\n'
                         b'<script>window.syntheticInjected=true</script><img src=x onerror=alert(1)>') if path == '/alpha' else b'Synthetic fixture observation only'
                 self.send_response(status); self.send_header('Content-Length', str(len(body))); self.end_headers()

@@ -1,4 +1,5 @@
 """Offline planner validation, real local model transport and bounded DNS tests."""
+from contextlib import closing
 import copy
 import http.server
 import importlib
@@ -279,14 +280,14 @@ class PlannerTests(unittest.TestCase):
         for change in changes:
             with self.subTest(change=change):
                 # Corrupt a fixture's stored JSON; do not replace the real store reader.
-                with sqlite3.connect(self.store.database) as db:
+                with closing(sqlite3.connect(self.store.database)) as db, db:
                     db.execute('UPDATE messages SET record=? WHERE id=?',(json.dumps(dict(consumed,**change)),message['id']))
                 self.denied(lambda:self.prepare())
                 self.assertEqual(self.store.model_calls(self.run['id']),[])
 
     def test_malformed_stored_history_json_has_safe_workspace_failure(self):
         message=self.store.add_message(self.run['id'],dict(request_id=uuid.uuid4().hex,kind='guidance',text='prior guidance'))
-        with sqlite3.connect(self.store.database) as db:
+        with closing(sqlite3.connect(self.store.database)) as db, db:
             db.execute('UPDATE messages SET record=? WHERE id=?',('{"text": "synthetic-key',message['id']))
         try:self.denied(lambda:self.prepare())
         except ValueError:self.fail('malformed stored JSON escaped the safe WorkspaceError boundary')
