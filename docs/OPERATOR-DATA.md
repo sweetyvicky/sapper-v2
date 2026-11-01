@@ -1,0 +1,46 @@
+# Task 2 frozen interface contract (2026-11-01)
+
+Imports: `pentest.workspace_intake.parse_assets`, `validate_draft`; `pentest.workspace_store.WorkspaceStore`, `WorkspaceError`; `pentest.workspace_reports.render_report`. Standard library only. Pure intake has no DNS/network side effects. WorkspaceError subclasses ValueError and exposes `.code`, `.message`. Codes: invalid, not_found, conflict, budget, unsafe_path, storage. Messages are bounded safe Chinese strings and do not interpolate payloads.
+
+## Intake
+
+`parse_assets(text: str, format='lines') -> dict`
+
+Output `{assets,errors,duplicates,counts:{rows,valid,invalid,duplicates}}`. Asset `{id,target,name,group,notes,assumed_scheme}`; deterministic id `asset_` + first24 hex SHA256(target UTF8), canonical target from policy.parse_url including explicit port and exact path/query. Bare host/IP/host:port uses HTTPS; bare numeric IPv6 brackets automatically. Import never resolves DNS. `errors` items `{row,input,message}`; `duplicates` items `{row,target,first_row}`. Rows are physical starting line numbers (CSV header is line1). CSV notes may span lines. Blank rows ignored, first record wins. Input <=1MiB UTF8, <=500 rows. Structural CSV errors (header, column count, quoting, newline in fields other than notes) raise WorkspaceError; invalid target/field rows are returned as errors. Caller MUST reject submission with unresolved import errors; valid rows alone do not encode acknowledgement of discarded errors.
+
+`validate_draft(data: dict) -> dict` rejects unknown keys, returns fresh canonical assets/defaults. Required: name1..160, goal1..8000 chars, assets1..500. Optional context/guidance<=16000 each, exclusions<=500 canonical strict CIDRs or HTTP(S) origins (no path/query, default port normalized), allowed_tools=['http_get','http_head'] (empty allowed), budgets={requests:30,bytes:1048576,seconds:300,parallel:1,model_calls:20}, expiry_seconds3600, max_request_seconds10, max_response_bytes32768, model_profile_id=null, role_profiles={}. Budget maxima requests10000,bytes104857600,seconds86400,parallel4,model_calls200; positive strict ints, partial budget objects filled with defaults. Expiry60..86400, request seconds1..60, response bytes1..1048576. Profile IDs canonical hyphenated UUID; role keys Commander/Scout/Soldier/General. Assets require exact six fields and boolean assumed_scheme, recompute stable ID, reject duplicate targets. name defaults only at import; draft asset name must be nonempty<=160, group<=160, notes<=4000. Newline/tab/CR permitted for multiline prose; C0 otherwise, DEL/C1 and unpaired surrogates rejected. No draft IDs/revisions/timestamps accepted. Draft JSON <=4MiB UTF8.
+
+## Store and record shapes
+
+`WorkspaceStore(root: Path, *, clock=time.time)` resolves trusted controller root once. SQLite uses fresh connections and BEGIN IMMEDIATE for data transactions. No public generic table mutation API. UUID IDs are strict lowercase32hex unless explicitly noted. All reads return independent JSON records. Tables separate from existing core campaign.
+
+- `save_draft(data, *, draft_id=None, expected_revision=None)` -> `{id,revision,created_at,updated_at,data}`. Create only with expected_revision=None; update requires matching strict integer revision. `get_draft(draft_id)` -> record.
+- `list_drafts(*,limit=100,offset=0)` -> summaries `{id,revision,created_at,updated_at,name,goal_preview,asset_count}` newest updated first. goal_preview<=160. Pagination strict ints limit1..100, offset0..1000000.
+- `create_run(draft_id, expected_revision)` -> `{id,draft_id,draft_revision,draft,status:'preparing',revision:1,created_at,updated_at,plan:null,policy:null,scope:null,stop_reason:null,engagement_complete:false}`. `draft` is frozen validated data (not draft record wrapper).
+- `get_run(run_id)` -> full record. `list_runs(draft_id=None,*,limit=100,offset=0)` -> `{id,draft_id,draft_revision,status,revision,created_at,updated_at,stop_reason}` summaries, newest created first; same bounds.
+- `campaign_path(run_id)` -> Path root/runs/<hex>/campaign. Requires known run; rejects symlinks/path escape; creates parents only. Campaign remains absent until existing cli.initialize creates it.
+- `update_run(run_id,patch,*,expected_revision)` -> full updated run. Nonempty patch keys limited status,plan,policy,scope,stop_reason,engagement_complete. Plan/policy/scope object or null. stop_reason null or text<=4000. Status preparing/awaiting_approval/ready/running/pause_requested/paused/cancel_requested/cancelled/blocked/completed/failed/needs_attention. engagement_complete only false. Max entire run4MiB. State-machine enforcement belongs to service.
+- `append_event(run_id,kind,detail)` -> `{sequence,run_id,at,kind,detail}`. kind1..64, strict JSON object detail<=32768 UTF8 bytes; no automatic redaction. `events(run_id,*,after=0,limit=200)` -> ascending global SQLite integer sequence; after>=0, limit1..1000. Service sanitizes details and maintains cursor.
+- `add_message(run_id,data)` -> `{id,run_id,request_id,kind,text,action_ids,finding_id,status:'queued',consumer:null,result:null,created_at,updated_at}`. Input required request_id lowercase UUIDhex, kind guidance/prioritize/retest, text1..4000; optional action_ids=[] <=100 safe scheduler identifiers `[A-Za-z0-9_-]{1,128}` (includes hyphen UUIDs) and finding_id=null/UUIDhex. Unknown fields rejected. Same run/request + identical normalized payload idempotent, mismatch conflict. Max1000 per run, idempotent retries still accepted at cap.
+- `messages(run_id)` -> insertion-ordered records (<=1000). `finish_message(run_id,message_id,*,status,consumer,result)` -> record; queued->consumed/failed only, exact terminal repeat idempotent, contradiction conflict. consumer1..160, result<=4000 text. No automatic model consumption.
+- `save_narrative(run_id,finding_id,data,*,expected_revision=None)` -> `{run_id,finding_id,revision,created_at,updated_at,data}`. Required nonempty description/impact/reproduction/remediation<=8000 chars each; optional cwe<=80 defaults'', operator_note<=4000 defaults''. No severity/title/status fields. Create only expected_revision=None, updates match revision. `get_narrative(run_id,finding_id)` -> latest or not_found; `narrative_history(run_id,finding_id)` -> ascending revisions (empty if absent); `narratives(run_id)` -> findingID-to-latest-record map. Service MUST check core finding existence first; this layer checks only run/ID validity.
+- `reserve_model_call(run_id,*,role,profile_id,purpose,message_ids=())` -> `{id,run_id,role,profile_id,purpose,message_ids,status:'reserved',created_at,finished_at:null,result:null}`. Role Commander/Scout/Soldier/General, canonical hyphen UUID profile ID, purpose plan/analyze/guidance/review. <=1000 unique message UUIDhex IDs, each queued on same run. Atomic frozen draft model_calls cap; consumes one permanently. Profile existence is service responsibility.
+- `finish_model_call(run_id,call_id,*,status,result)` -> record; status succeeded/failed/uncertain, strict JSON result<=32768 bytes. Exact terminal repeat idempotent, contradiction conflict. `model_calls(run_id)` -> insertion-ordered attempts. Reserving does not consume messages. Service reconciles reserved attempts after restart as uncertain without retry/refund.
+
+Timestamps are injected clock epoch numbers. Revision conflicts do not overwrite. Invalid booleans-as-integers, NaN/infinity, non-JSON values and duplicate persisted object keys fail. Controller database is trusted local state, not an adversarial authenticated file format.
+
+## Reports
+
+`render_report(snapshot: dict, format: str) -> str` accepts markdown/html/json only, snapshot.version must be strict int1. UTF8 output. Service assembles explicit public schema:
+
+```
+{version:1,generated_at,task:{id,name,goal,context,guidance,assets,exclusions,allowed_tools},
+ run:{id,status,stop_reason,engagement_complete},budget:{limits,usage,model_calls},
+ coverage:{metrics,assets,checks,cells},
+ findings:[{id,title,severity,status,target,reporter,description,impact,reproduction,
+ remediation,cwe,operator_note,fact_id,evidence:[{id,receipt_id,target,tool,status,
+ http_status,started_at,finished_at,body_sha256,excerpt}],reviews,invalid_reasons}],
+ messages:[...],events:[...]}
+```
+
+Absent optional metadata/list sections become empty/not-provided; no recursive raw snapshot dump in narrative formats. Coverage supports native core label/method/state/reasons/task_id/task_ids/fact_ids/finding_ids/evidence_ids. Reviews support core reviewer/outcome/note/evidence_id/at and generic verdict/reason metadata. JSON returns the service-assembled public snapshot unchanged. Common secret key names (case-insensitive api_key,authorization,password,secret,access_token,refresh_token,session_token,csrf_token and hyphen variants) rejected recursively; prose containing those words is allowed. Max snapshot32MiB strict JSON. This guard does not substitute for service redaction or whitelist construction. MIME/download route is service-owned.
