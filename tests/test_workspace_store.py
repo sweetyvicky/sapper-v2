@@ -292,3 +292,14 @@ class WorkspaceTests(unittest.TestCase):
             Store(unavailable)
         self.assertEqual(caught.exception.code,'storage')
         self.assertEqual(caught.exception.message,'工作区存储操作失败')
+    def test_report_plan_gaps_and_general_advice_are_escaped_and_unapplied(self):
+        *_, render = self.api()
+        snapshot=dict(version=1,task={},run={},budget=dict(model_calls=[dict(result=dict(summary='Analysis summary',gaps=['Unverified session handling']))]),plan=dict(revision=2,summary='Plan <script>x</script>',gaps=['Untested login authorization']),
+            review_suggestions=[dict(finding_id='case-one',evidence_id='evidence-two',call_id='call-three',state='suggested',outcome='confirmed',note='Advice <img src=x>')])
+        for format in ('markdown','html'):
+            output=render(snapshot,format)
+            for value in ('Untested login authorization','Unverified session handling','模型复核建议','尚未采纳','case-one','evidence-two','call-three','confirmed'):
+                self.assertIn(value,output)
+            self.assertNotIn('<script>x</script>',output)
+            self.assertNotIn('<img src=x>',output)
+            self.assertNotIn('已确认',output.split('模型复核建议')[-1].split('预算与模型调用')[0])
