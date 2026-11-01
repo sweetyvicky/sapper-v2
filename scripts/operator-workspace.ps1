@@ -3,10 +3,12 @@ param(
     [ValidateSet('Start','Status','Open','Stop')][string]$Action='Status',
     [string]$HomeDirectory=(Join-Path $PSScriptRoot '../../operator-workspace'),
     [ValidateRange(1,65535)][int]$Port=8765,
-    [switch]$NoBrowser
+    [switch]$NoBrowser,
+    [switch]$AcknowledgePreviousFailure
 )
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version 3
+if ($AcknowledgePreviousFailure -and $Action -ne 'Start') { throw 'AcknowledgePreviousFailure is supported only on Start for an owned stopped failure.' }
 $image='python:3.12-slim@sha256:aa943ce411423c7582288f18707ff66eddcbaeb510502d747a72aeb34f30d159'
 $source=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 if (-not $IsWindows) { throw 'Run this installer on Windows with PowerShell 7 and Linux Docker.' }
@@ -33,6 +35,7 @@ function Tree-Ordinary([string]$path) {
 Ordinary $base
 $manifestPath=Join-Path $base 'deployment.json'
 if (-not (Test-Path -LiteralPath $manifestPath)) {
+    if ($AcknowledgePreviousFailure) { throw 'Acknowledgment requires an existing owned stopped failure.' }
     if ($Action -eq 'Status' -and -not (Test-Path -LiteralPath $base)) { '{"installed":false}'; return }
     if ($Action -ne 'Start') { throw 'No owned installation exists.' }
     if ((Test-Path -LiteralPath $base) -and @(Get-ChildItem -Force -LiteralPath $base).Count) { throw 'Fresh installation home must be empty.' }
@@ -71,7 +74,7 @@ function Save {
     Move-Item -LiteralPath $temp -Destination $manifestPath -Force
 }
 function Normalize([string]$path) { $path.Replace('\','/').TrimEnd('/').ToLowerInvariant() }
-function Release-Valid {
+function Release-Valid($m=$script:m) {
     if ($m.schema -ne 1 -or $m.owner -notmatch '^[a-f0-9]{32}$' -or $m.home -ne $base -or $m.image -ne $image -or
         $m.state -ne (Join-Path $base 'state') -or $m.models -ne (Join-Path $base 'models') -or
         $m.release -ne (Join-Path $base ('releases/'+$m.generation)) -or $m.generation -notmatch '^[a-f0-9]{32}$' -or
@@ -153,9 +156,22 @@ function Show {
     if ($item.State.Running) {
         try { $null=Ready; $ready=$true } catch { $m.phase='readiness_failed'; $m.lastReadinessFailure=[DateTime]::UtcNow.ToString('o'); Save; throw 'Workspace readiness failed; private runtime diagnosis retained.' }
     }
+    $failed=-not $item.State.Running -and ($m.phase -ne 'stopped_clean' -or $item.State.ExitCode -ne 0 -or $item.State.OOMKilled)
+    if ($failed) { Record-Failure $item 'unexpected_exit' }
     @{installed=$true;version=$m.version;tree=$m.tree;running=[bool]$item.State.Running;ready=$ready;phase=$m.phase;
-      exitCode=$item.State.ExitCode;state=$m.state;models=$m.models;url=('http://127.0.0.1:'+$m.port+'/');
+      exitCode=$item.State.ExitCode;oomKilled=[bool]$item.State.OOMKilled;lastFailure=$m['lastFailure'];state=$m.state;models=$m.models;url=('http://127.0.0.1:'+$m.port+'/');
       sourcePolicy='Running Start is idempotent. Stop then Start installs the current committed checkout.'}|ConvertTo-Json
+    if ($failed) { throw 'Owned workspace unexpectedly stopped; failure diagnosis retained. Inspect Status, then deliberately Start -AcknowledgePreviousFailure to recover without replay.' }
+}
+function Record-Failure($item,[string]$phase) {
+    if (-not $m['lastFailure'] -or $m.lastFailure.generation -ne $m.generation) {
+        $m.lastFailure=@{generation=$m.generation;version=$m.version;tree=$m.tree;containerId=$m.container.id;
+            exitCode=$item.State.ExitCode;oomKilled=[bool]$item.State.OOMKilled;observedAt=[DateTime]::UtcNow.ToString('o');reason=$phase}
+    }
+    # Keep the original diagnosis even when a subsequent Stop observes the same failed process.
+    $m.phase=$phase; Save
+    Docker @('logs',$m.container.id)|Set-Content -LiteralPath (Join-Path $base ('runtime/'+$m.generation+'.log')) -Encoding utf8
+    $bootstrap=Join-Path $base 'runtime/bootstrap.url'; if (Test-Path -LiteralPath $bootstrap) { Remove-Item -LiteralPath $bootstrap }
 }
 function Check-Port([int]$number) {
     $listener=[Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback,$number)
@@ -178,16 +194,15 @@ function Snapshot {
     foreach ($file in Get-ChildItem -Force -Recurse -File -LiteralPath $release) { $files[[IO.Path]::GetRelativePath($release,$file.FullName)]=(Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash }
     @{version=$version;tree=$tree;files=$files}|ConvertTo-Json -Depth 8|Set-Content -LiteralPath ($release+'.integrity.json') -Encoding utf8
     Remove-Item -LiteralPath $archive
-    if ($script:m) {
-        $script:m|ConvertTo-Json -Depth 20|Set-Content -LiteralPath (Join-Path $base ('runtime/deployment-'+$m.generation+'.json')) -Encoding utf8
-        $owner=$m.owner
-    } else { $owner=[guid]::NewGuid().ToString('N') }
+    if ($script:m) { $owner=$m.owner } else { $owner=[guid]::NewGuid().ToString('N') }
     $prefix='sapper-operator-'+$owner.Substring(0,8)+'-'+$generation.Substring(0,8)
-    $script:m=@{schema=1;owner=$owner;home=$base;image=$image;generation=$generation;version=$version;tree=$tree;release=$release;
+    $candidate=@{schema=1;owner=$owner;home=$base;image=$image;generation=$generation;version=$version;tree=$tree;release=$release;
         inventoryHash=(Get-FileHash -LiteralPath ($release+'.integrity.json') -Algorithm SHA256).Hash;
         state=(Join-Path $base 'state');models=(Join-Path $base 'models');port=$Port;phase='captured';
         network=@{name=$prefix+'-net';id=''};container=@{name=$prefix+'-app';id=''}}
-    Save; Release-Valid
+    if ($script:m -and $m['lastFailure']) { $candidate.lastFailure=$m.lastFailure|ConvertTo-Json -Depth 10|ConvertFrom-Json -AsHashtable }
+    Release-Valid $candidate
+    return $candidate
 }
 function Stop-Owned {
     $item=Owned
@@ -198,9 +213,10 @@ function Stop-Owned {
     }
     $item=Owned
     Docker @('logs',$m.container.id)|Set-Content -LiteralPath (Join-Path $base ('runtime/'+$m.generation+'.log')) -Encoding utf8
-    if ($item.State.Running -or $item.State.ExitCode -ne 0 -or $item.State.OOMKilled) {
-        $m.phase='stop_incomplete_or_forced'; Save
-        throw 'Owned workspace stop was incomplete or forced; state retained. Recovery requires attention and does not replay work.'
+    if ($item.State.Running -or $item.State.ExitCode -ne 0 -or $item.State.OOMKilled -or
+        ($m.phase -notin @('stop_pending','stopped_clean') -and $item.State.Status -ne 'created')) {
+        Record-Failure $item 'stop_incomplete_or_forced'
+        throw 'Owned workspace stop was incomplete, forced or unexpected; state and failure retained. Inspect Status, then deliberately Start -AcknowledgePreviousFailure to recover without replay.'
     }
     $m.phase='stopped_clean'; Save
     $bootstrap=Join-Path $base 'runtime/bootstrap.url'; if (Test-Path -LiteralPath $bootstrap) { Remove-Item -LiteralPath $bootstrap }
@@ -224,17 +240,33 @@ try {
         'Stop' { Stop-Owned; Show }
         'Open' { $url=Ready; if (-not $NoBrowser) { Start-Process $url }; @{opened=(-not $NoBrowser);ready=$true;url=('http://127.0.0.1:'+$m.port+'/')}|ConvertTo-Json }
         'Start' {
-            if ($m -and (Owned).State.Running) { $url=Ready; if (-not $NoBrowser) { Start-Process $url }; Show; break }
+            if ($m -and (Owned).State.Running) {
+                if ($AcknowledgePreviousFailure) { throw 'Acknowledgment requires an owned stopped failure; running deployment was not changed.' }
+                $url=Ready; if (-not $NoBrowser) { Start-Process $url }; Show; break
+            }
             Check-Port $Port
             $dirty=& git -C $source status --porcelain --untracked-files=no
             if ($LASTEXITCODE -ne 0 -or $dirty) { throw 'Start requires a clean committed tracked checkout.' }
             if ($m) {
-                # Validate all resources before any removal; retain exit diagnosis and source/state.
+                $item=Owned
+                if ($m.phase -ne 'stopped_clean' -or $item.State.ExitCode -ne 0 -or $item.State.OOMKilled) {
+                    Record-Failure $item 'unexpected_exit'
+                    if (-not $AcknowledgePreviousFailure) { throw 'Previous deployment did not stop cleanly. Inspect Status, then deliberately Start -AcknowledgePreviousFailure; no work is replayed.' }
+                } elseif ($AcknowledgePreviousFailure) { throw 'No current failed exit to acknowledge; use normal Start after a clean Stop.' }
+            } elseif ($AcknowledgePreviousFailure) { throw 'Acknowledgment requires an existing owned stopped failure.' }
+            # Capture and verify the entire candidate before changing the installed manifest/resources.
+            $candidate=Snapshot
+            if ($m) {
                 $null=Owned
-                if ($m.phase -ne 'stopped_clean') { throw 'Previous deployment did not stop cleanly; inspect private diagnosis before an explicit owned Stop.' }
+                if ($AcknowledgePreviousFailure) {
+                    $m.lastFailure.acknowledgedAt=[DateTime]::UtcNow.ToString('o')
+                    $candidate.lastFailure=$m.lastFailure|ConvertTo-Json -Depth 10|ConvertFrom-Json -AsHashtable
+                }
+                $m|ConvertTo-Json -Depth 20|Set-Content -LiteralPath (Join-Path $base ('runtime/deployment-'+$m.generation+'.json')) -Encoding utf8
+                # Resource creation/removal failures after this boundary retain metadata for diagnosis.
                 $null=Docker @('rm',$m.container.id); $null=Docker @('network','rm',$m.network.id)
             }
-            Snapshot
+            $script:m=$candidate; Save
             $m.network.id=Docker (@('network','create','--driver','bridge')+(Label-Args 'network')+@($m.network.name)); $m.phase='network_created'; Save
             $args=@('create','--name',$m.container.name,'--network',$m.network.name,'--cpus','2','--memory','1g','--pids-limit','128',
                 '--cap-drop','ALL','--security-opt','no-new-privileges','--read-only','--stop-timeout','300','--tmpfs','/tmp:rw,nosuid,nodev,size=128m',
