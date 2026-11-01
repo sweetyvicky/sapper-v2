@@ -45,7 +45,7 @@ try { [IO.File]::AppendAllText($file,'tampered'); Reject Status $HomeDirectory '
 finally { [IO.File]::WriteAllBytes($file,$before) }
 # Altering a recorded ID to an unrelated container must never act on it.
 $manifest=Join-Path $HomeDirectory 'deployment.json'; $original=[IO.File]::ReadAllBytes($manifest)
-try { $m.container.id='f'*64; $m|ConvertTo-Json -Depth 16|Set-Content $manifest; Reject Stop $HomeDirectory 'missing' }
+try { $m.container.id='f'*64; $m|ConvertTo-Json -Depth 16|Set-Content $manifest; Reject Stop $HomeDirectory 'owned' }
 finally { [IO.File]::WriteAllBytes($manifest,$original) }
 # A real unrelated stopped container must remain untouched despite a forged record.
 $foreignName='sapper-deployment-negative-'+[guid]::NewGuid().ToString('N')
@@ -54,7 +54,7 @@ Assert ($LASTEXITCODE -eq 0) 'Negative fixture creation failed.'
 try {
     $m.container=@{id=$foreignId;name=$foreignName}
     $m|ConvertTo-Json -Depth 16|Set-Content $manifest
-    Reject Stop $HomeDirectory 'ownership'
+    Reject Stop $HomeDirectory 'owned'
     $probe=(& docker.exe inspect $foreignId|ConvertFrom-Json)[0]
     Assert ($probe.Id -eq $foreignId -and $probe.State.Status -eq 'created') 'Unrelated resource changed.'
 } finally {
