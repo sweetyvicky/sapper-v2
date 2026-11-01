@@ -1,8 +1,12 @@
 # sapper-v2 — The Autonomous Pentest Legion
 
+## 中文操作工作区
+
+浏览器中的完整任务工作区支持模型配置、批量资产、精确动作审批、人工指导、有效覆盖、漏洞复测/复核与报告下载。先阅读 [中文操作指南](docs/OPERATOR-WORKSPACE.md)。它使用本地会话和受保护的真实请求流程，启动后为空，不会自动开始测试。最终部署与独立报告排版仍需后续验收；旧只读归档保留。
+
 ## Protected quick start
 
-Start with the offline JSON Mock campaign: `python lib/sapper.py pentest demo` inside the resource-limited Linux Docker command in [the operator guide](docs/AUTHORIZED-PENTEST.md). No keys or external targets are needed. Bounded HTTP, exact operator approval, evidence review and persistent budgets are implemented; live model adapters are unsupported. Legacy model/network launchers now require explicit `SAPPER_MODE=competition`. That setting selects the old product; it is not a hostile-process sandbox.
+Start with the offline JSON Mock campaign: `python lib/sapper.py pentest demo` inside the resource-limited Linux Docker command in [the operator guide](docs/AUTHORIZED-PENTEST.md). No keys or external targets are needed. Bounded HTTP, exact operator approval, evidence review and persistent budgets are implemented; the CLI demo itself does not call a model. The separate operator Workspace supports explicitly configured compatible Chat Completions profiles. Legacy model/network launchers now require explicit `SAPPER_MODE=competition`. That setting selects the old product; it is not a hostile-process sandbox.
 
 > **Champion** of the 3rd Tencent Cloud Intelligent Attack-Defense Challenge online qualifier
 > (634 teams · 80.18/100 · 8 hours fully unattended) · **First Prize**, GeekCon 2026 AI Challenge
@@ -191,3 +195,7 @@ thanks to TSecBench and GeekCon for the battlegrounds.
 **License**: MIT (plus [DISCLAIMER.md](DISCLAIMER.md))
 
 The local read-only Chinese coverage workspace, standalone snapshot and real recorded replay are documented in [Coverage Console](docs/COVERAGE-CONSOLE.md).
+
+## Windows operator workspace
+
+打开工作台 → 模型设置 → 新建任务 → 审核计划 → 测试过程 → 漏洞与报告。Use the [Windows local deployment guide](docs/OPERATOR-DEPLOYMENT.md) for persistent Linux Docker installation, private model settings, daily Start/Status/Open/Stop controls and safe upgrades. Start captures a committed source snapshot and does not call a model or target automatically.
