@@ -105,14 +105,18 @@ function Inspect([string]$kind,$record) {
 function Owned {
     Release-Valid
     $network=Inspect network $m.network; Labels-Valid $network.Labels 'network'
-    if ($network.Driver -ne 'bridge' -or $network.Internal -or $network.EnableIPv6 -or @($network.Options.Keys).Count -ne 0) { throw 'Owned bridge configuration mismatch.' }
+    if ($network.Driver -ne 'bridge' -or $network.Internal -or $network.EnableIPv6) { throw 'Owned bridge configuration mismatch.' }
+    foreach ($key in $network.Options.Keys) {
+        $expected=switch ($key) { 'com.docker.network.enable_ipv4' {'true'}; 'com.docker.network.enable_ipv6' {'false'}; default { throw 'Owned bridge option mismatch.' } }
+        if ($network.Options[$key] -ne $expected) { throw 'Owned bridge option mismatch.' }
+    }
     foreach ($id in $network.Containers.Keys) { if ($id -ne $m.container.id) { throw 'Unowned member on owned network.' } }
     $item=Inspect container $m.container; Labels-Valid $item.Config.Labels 'app'
     $h=$item.HostConfig
     if ($item.Config.Image -ne $image -or $h.Privileged -or -not $h.ReadonlyRootfs -or $h.NanoCpus -ne 2000000000 -or
         $h.Memory -ne 1073741824 -or $h.PidsLimit -ne 128 -or 'ALL' -notin $h.CapDrop -or 'no-new-privileges' -notin $h.SecurityOpt -or
         $h.Tmpfs.'/tmp' -ne 'rw,nosuid,nodev,size=128m' -or $h.NetworkMode -ne $m.network.name -or
-        $h.RestartPolicy.Name -ne 'no' -or @($h.Devices).Count -or @($h.Binds).Count -or $item.Config.StopTimeout -ne 300 -or
+        $h.RestartPolicy.Name -ne 'no' -or ($null -ne $h.Devices -and $h.Devices.Count -gt 0) -or ($null -ne $h.Binds -and $h.Binds.Count -gt 0) -or $item.Config.StopTimeout -ne 300 -or
         $item.Config.WorkingDir -ne '/src' -or ($item.Config.Cmd|ConvertTo-Json -Compress) -ne ((Command)|ConvertTo-Json -Compress)) { throw 'Owned container boundary mismatch.' }
     $mounts=@($item.Mounts)
     if ($mounts.Count -ne 3) { throw 'Owned mount count mismatch.' }
