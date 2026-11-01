@@ -61,6 +61,9 @@ and continuous response reads. Timeout kills and reaps the child; socket idle
 timeouts alone are not the boundary. TLS verification stays enabled. Proxy
 environment settings and redirects are disabled. No streaming, tools, function
 calls, browsing or response_format assumption is used.
+Child results use explicitly encoded UTF-8, preserving bounded non-BMP text
+without ASCII-escape expansion; unpaired Unicode surrogates are rejected as
+invalid_response. The provider response limit remains 1 MiB.
 
 `ModelError.code` is a static classified cause: invalid_profile, invalid_fields,
 invalid_endpoint, key_required, storage_error, invalid_messages,
@@ -82,8 +85,10 @@ establish Windows ACL protection. Never export or serve the secret directory.
 Back it up only under the same access protection as credentials.
 
 SQLite transactions publish metadata only after writing a replacement key.
-An abrupt process/system crash between those steps can leave an unused secret
-file; it is never selected as a fallback. Operators should protect the entire
+An abrupt process/system crash between those steps, or a failed write whose
+partial-file cleanup is denied, can leave an unused private secret file. Cleanup
+failure still returns the static storage_error without the filesystem exception;
+an orphan is never selected as a fallback. Operators should protect the entire
 state tree from local modification. This module does not defend against an
 attacker who already controls local state or the Python interpreter. It does
 not impose provider concurrency or campaign model-call budgets: orchestration
