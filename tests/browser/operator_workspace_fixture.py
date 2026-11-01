@@ -1,5 +1,6 @@
 """Trusted, synthetic-only browser harness. Never imported by production entry points."""
 import argparse
+import fcntl
 import http.client
 import http.server
 import json
@@ -15,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'lib'))
 from pentest.models import ModelProfiles
 from pentest.workspace import Workspace
 from pentest.workspace_http import create_server
+from pentest.workspace_intake import WorkspaceError
 
 SYNTHETIC_KEY = 'sapper-browser-synthetic-key-only'
 TARGET_PORT = 9551
@@ -44,7 +46,6 @@ class OperatorFixture:
             raise ValueError('8765 is reserved for the unrelated viewer')
         self.home = Path(home).resolve()
         self.state = self.home / 'fixture'
-        self.state.mkdir(parents=True, exist_ok=True)
         self.port = port
         self.container_listen = container_listen
         self.target_origin = 'http://127.0.0.1:9551'
@@ -54,9 +55,10 @@ class OperatorFixture:
         self.release = threading.Event()
         self.servers = []; self.threads = []
         self.http = self.ws = None
-        self.data = json.loads((self.state/'records.json').read_text()) if (self.state/'records.json').exists() else dict(
+        self._home_lock = None
+        self._private_files = set()
+        self.data = dict(
             version=1, generation=0, target_hits=[], model_calls=[], emitted_fact_ids=[], guided_run_ids=[])
-        self.data.setdefault('guided_run_ids', [])
         self.barrier = dict(armed=False, pending=False)
         self.fail_next = None
         self.last_control = None
@@ -190,15 +192,30 @@ class OperatorFixture:
                 self.reply(200, dict(model=selected_model, choices=[dict(message=dict(content='OK' if context is None else json.dumps(proposal)))],
                     usage=dict(prompt_tokens=3,completion_tokens=2,total_tokens=5)))
         try:
-            # Workspace root lock also prevents two fixtures sharing durable state.
+            # Keep fixture ownership through resource shutdown and private cleanup,
+            # even after HTTP close releases the Workspace root lock.
+            self.home.mkdir(parents=True, exist_ok=True)
+            handle = open(self.home/'fixture.lock', 'a+b')
+            try: fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                handle.close()
+                raise WorkspaceError('conflict', 'Synthetic fixture home already owned') from None
+            except BaseException:
+                handle.close(); raise
+            self._home_lock = handle
             models=ModelProfiles(self.home/'models', allow_http_loopback=True)
             self.ws=Workspace(self.home/'workspace', models=models)
+            self.state.mkdir(parents=True, exist_ok=True)
+            if (self.state/'records.json').exists():
+                self.data=json.loads((self.state/'records.json').read_text())
+            self.data.setdefault('guided_run_ids', [])
             self._listen(TARGET_PORT, Target); self._listen(MODEL_PORT, Provider)
             self.http=create_server(workspace=self.ws, owns_workspace=True, port=self.port, container_listen=self.container_listen)
             self.port=self.http.server_port
             with self.lock:
                 self.data['generation']+=1; self.persist()
             private=self.state/'bootstrap.url'
+            self._private_files.add(private)
             private.write_text(self.origin+'/#'+self.http.bootstrap_token, encoding='utf-8'); private.chmod(0o600)
             # Controls from previous generations must never be replayed.
             (self.state/'control.json').unlink(missing_ok=True)
@@ -271,7 +288,9 @@ class OperatorFixture:
             request('GET',path,headers={'Cookie':cookie})
         if before!=self.metadata()['counts']: raise RuntimeError('readiness unexpectedly made calls')
         with self.lock:
-            write_json(self.state/'ready.json',dict(version=1,generation=self.data['generation'],authenticated=True,inert=True))
+            private=self.state/'ready.json'
+            self._private_files.add(private)
+            write_json(private,dict(version=1,generation=self.data['generation'],authenticated=True,inert=True))
         return self.metadata()
 
     def close(self):
@@ -286,8 +305,11 @@ class OperatorFixture:
             thread.join(30)
             if thread.is_alive(): raise RuntimeError('fixture thread did not stop')
         self.servers=[]; self.threads=[]; self.ws=None
-        (self.state/'bootstrap.url').unlink(missing_ok=True)
-        (self.state/'ready.json').unlink(missing_ok=True)
+        for private in tuple(self._private_files):
+            private.unlink(missing_ok=True)
+            self._private_files.remove(private)
+        if self._home_lock is not None:
+            self._home_lock.close(); self._home_lock=None
 
 
 def main():

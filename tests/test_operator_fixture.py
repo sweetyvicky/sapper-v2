@@ -8,11 +8,117 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 import uuid
 
 sys.path.insert(0, str(Path(__file__).parent / 'browser'))
 from operator_workspace_fixture import OperatorFixture, SYNTHETIC_KEY
 from operator_fixture_relay import RelayServer
+from pentest.workspace_intake import WorkspaceError
+
+
+class OperatorFixtureOwnershipTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.home = Path(self.tmp.name)
+
+    def fixture(self):
+        fixture = OperatorFixture(self.home, port=0)
+        self.addCleanup(fixture.close)
+        return fixture
+
+    def test_rejected_start_preserves_incumbent_private_files_records_and_controls(self):
+        first = self.fixture().start()
+        # Hold a valid pending file control deterministically, without a polling race.
+        first.stopping.set(); first.threads[-1].join(5)
+        self.assertFalse(first.threads[-1].is_alive())
+        first.control('arm'); first.control('fail_next', 'plan')
+        (first.state/'control.json').write_text(json.dumps(dict(
+            id=uuid.uuid4().hex, command='release', purpose=None)))
+        (first.state/'control-ack.json').write_text(json.dumps(dict(id=uuid.uuid4().hex, ok=True)))
+        names = ('bootstrap.url', 'ready.json', 'records.json', 'metadata.json', 'control.json', 'control-ack.json')
+        before = {name:(first.state/name).read_bytes() for name in names}
+        metadata = first.metadata(); records = first.records()
+        second = self.fixture()
+        with self.assertRaises(WorkspaceError): second.start()
+        second.close()
+        self.assertTrue({name:(first.state/name).read_bytes() if (first.state/name).exists() else None
+                         for name in names} == before, 'rejected start changed incumbent files')
+        self.assertEqual(first.metadata(), metadata)
+        self.assertEqual(first.records(), records)
+        self.assertEqual(first.readiness(), metadata)
+        self.assertEqual(metadata['counts']['target_total'], 0)
+        self.assertEqual(metadata['counts']['model_total'], 0)
+        self.assertIsNone(second.ws)
+        self.assertIsNone(second.http)
+        self.assertEqual(second.servers, [])
+        self.assertEqual(second.threads, [])
+
+    def test_private_cleanup_keeps_ownership_until_files_are_removed(self):
+        first = self.fixture().start()
+        attempts = []; rejected = []
+        unlink = Path.unlink
+
+        def try_start_at_cleanup(path, *args, **kwargs):
+            if path == first.state/'bootstrap.url' and not attempts:
+                successor = self.fixture(); attempts.append(successor)
+                try: successor.start()
+                except WorkspaceError: rejected.append(True)
+            return unlink(path, *args, **kwargs)
+
+        # Force the interleaving at the actual private-file deletion boundary.
+        with patch.object(Path, 'unlink', new=try_start_at_cleanup): first.close()
+        self.assertEqual(len(attempts), 1)
+        self.assertEqual(rejected, [True], 'home ownership released before private cleanup')
+        self.assertFalse((first.state/'bootstrap.url').exists())
+        self.assertFalse((first.state/'ready.json').exists())
+        successor = self.fixture().start()
+        before = {name:(successor.state/name).read_bytes() for name in ('bootstrap.url', 'ready.json')}
+        first.close()
+        self.assertTrue({name:(successor.state/name).read_bytes() for name in before} == before,
+                        'old closer changed successor private files')
+        self.assertEqual(successor.readiness()['generation'], 2)
+        self.assertEqual(successor.metadata()['counts']['target_total'], 0)
+        self.assertEqual(successor.metadata()['counts']['model_total'], 0)
+
+    def test_constructor_does_not_snapshot_state_before_ownership(self):
+        first = self.fixture()
+        successor = self.fixture()
+        first.start(); first.close()
+        successor.start()
+        self.assertEqual(successor.readiness()['generation'], 2)
+        self.assertEqual(successor.metadata()['counts']['target_total'], 0)
+        self.assertEqual(successor.metadata()['counts']['model_total'], 0)
+
+    def test_failed_first_start_closes_acquired_resources_and_private_files(self):
+        fixture = self.fixture()
+        readiness = fixture.readiness
+        acquired = {}
+
+        def fail_after_readiness():
+            readiness()
+            acquired.update(http=fixture.http, ws=fixture.ws,
+                            servers=list(fixture.servers), threads=list(fixture.threads))
+            raise RuntimeError('injected post-readiness startup failure')
+
+        with patch.object(fixture, 'readiness', side_effect=fail_after_readiness):
+            with self.assertRaisesRegex(RuntimeError, 'injected post-readiness startup failure'):
+                fixture.start()
+        self.assertIsNone(fixture.http)
+        self.assertIsNone(fixture.ws)
+        self.assertEqual(fixture.servers, [])
+        self.assertEqual(fixture.threads, [])
+        self.assertTrue(acquired['ws']._handle.closed)
+        self.assertEqual(acquired['http'].socket.fileno(), -1)
+        self.assertTrue(all(server.socket.fileno() == -1 for server in acquired['servers']))
+        self.assertTrue(all(not thread.is_alive() for thread in acquired['threads']))
+        self.assertFalse((fixture.state/'bootstrap.url').exists())
+        self.assertFalse((fixture.state/'ready.json').exists())
+        successor = self.fixture().start()
+        self.assertEqual(successor.readiness()['generation'], 2)
+        self.assertEqual(successor.metadata()['counts']['target_total'], 0)
+        self.assertEqual(successor.metadata()['counts']['model_total'], 0)
 
 
 class OperatorFixtureTests(unittest.TestCase):

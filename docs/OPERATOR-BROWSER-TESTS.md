@@ -10,6 +10,9 @@ The source is a live **read-only** bind mount: later UI files appear immediately
 This is a browser development fixture, not an immutable production deployment.
 Workspace and model state persist at `/state/workspace` and `/state/models`.
 Independent fixture counters persist at `/state/fixture` across process restarts.
+`/state/fixture.lock` retains exclusive fixture ownership through resource shutdown
+and private bootstrap/readiness cleanup; keep this stable lock file between starts.
+Rejected overlapping starts leave the incumbent's files and pending controls intact.
 
 ## Lifecycle on Windows 11 / PowerShell 7
 
