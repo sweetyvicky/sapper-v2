@@ -31,7 +31,7 @@ function Inspect-Owned($resource, [string]$kind) {
     if (-not $resource -or -not $resource.id) { return $null }
     $raw = & docker.exe $kind inspect $resource.id 2>$null
     if ($LASTEXITCODE -ne 0) { return $null }
-    $item = ($raw -join "`n" | ConvertFrom-Json -AsHashtable)[0]
+    $item = @($raw -join "`n" | ConvertFrom-Json -AsHashtable)[0]
     $labels = if ($kind -eq 'container') { $item.Config.Labels } else { $item.Labels }
     $name = $item.Name.TrimStart('/')
     if ($item.Id -ne $resource.id -or $name -ne $resource.name -or
@@ -196,6 +196,7 @@ try {
         }
     }
 } finally { $lock.Dispose() }
+
 
 
 
