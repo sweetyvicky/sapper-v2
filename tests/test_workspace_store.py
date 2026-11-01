@@ -130,7 +130,7 @@ class WorkspaceTests(unittest.TestCase):
         for value in ('abc123', 'receipt', 'independent', 'headers', 'limit', '2026-11-01'):
             self.assertIn(value, html); self.assertIn(value, md)
         self.assertNotIn('```<script>', md)
-        self.assertIn('过期', html)
+        self.assertIn('证据已失效', html)
         self.assertEqual(json.loads(render(snapshot, 'json')), snapshot)
         with self.assertRaises(ValueError): render(dict(snapshot, secret='hidden'), 'json')
         with self.assertRaises(ValueError): render(snapshot, 'pdf')
@@ -202,7 +202,7 @@ class WorkspaceTests(unittest.TestCase):
     def test_report_recursive_secret_names_and_all_states(self):
         *_,render = self.api()
         snapshot = dict(version=1,task={},run={},findings=[dict(id=str(i),status=s) for i,s in enumerate(('candidate','confirmed','rejected','inconclusive','stale'))])
-        for token in ('候选','已确认','已拒绝','未定论','已过期'): self.assertIn(token,render(snapshot,'html'))
+        for token in ('候选','已确认','已拒绝','未定论','证据已失效'): self.assertIn(token,render(snapshot,'html'))
         for secret in ('api_key','Authorization','password','secret'):
             with self.assertRaises(ValueError): render(dict(snapshot,events=[{'detail':{secret:'x'}}]),'markdown')
         self.assertIn('password is prose',render(dict(snapshot,task={'goal':'password is prose'}),'html'))
@@ -242,7 +242,7 @@ class WorkspaceTests(unittest.TestCase):
         literals = [('任务名称','failed'),('目标','confirmed'),('停止原因','blocked'),
                     ('备注','manual'),('标题','failed'),('描述','candidate'),
                     ('影响','confirmed'),('复现','rejected'),('修复建议','inconclusive'),
-                    ('操作员补充','stale'),('已脱敏摘录','failed'),('审查记录','queued')]
+                    ('操作员补充','stale'),('内容摘录（已隐藏常见敏感字段）','failed'),('审查记录','queued')]
         states = [('状态','失败'),('状态','未测试'),('状态','候选'),
                   ('状态','成功'),('结论','已拒绝')]
         for format in ('html','markdown'):
