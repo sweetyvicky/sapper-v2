@@ -195,3 +195,7 @@ thanks to TSecBench and GeekCon for the battlegrounds.
 **License**: MIT (plus [DISCLAIMER.md](DISCLAIMER.md))
 
 The local read-only Chinese coverage workspace, standalone snapshot and real recorded replay are documented in [Coverage Console](docs/COVERAGE-CONSOLE.md).
+
+## Windows operator workspace
+
+打开工作台 → 模型设置 → 新建任务 → 审核计划 → 测试过程 → 漏洞与报告。Use the [Windows local deployment guide](docs/OPERATOR-DEPLOYMENT.md) for persistent Linux Docker installation, private model settings, daily Start/Status/Open/Stop controls and safe upgrades. Start captures a committed source snapshot and does not call a model or target automatically.
