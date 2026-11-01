@@ -339,6 +339,38 @@ class PlannerTests(unittest.TestCase):
                 for neighbor in neighbors:self.assertIn(neighbor,excerpt)
                 self.assertLessEqual(len(excerpt),4096)
 
+    def test_excerpt_cookie_header_punctuation_masks_through_line_boundary(self):
+        cases=[
+            'Cookie: sid=prefix&synthetic-cookie; other=synthetic-other',
+            'Set-Cookie: sid=prefix&synthetic-cookie; Path=/; HttpOnly',
+            "Cookie: sid=prefix'synthetic-cookie; other=synthetic-other",
+            'Cookie: sid=prefix}synthetic-cookie; other=synthetic-other',
+            'Cookie: sid="prefix&synthetic-cookie"; other=synthetic-other',
+            '  cOoKiE : sid=prefix&synthetic-cookie; other=synthetic-other',
+        ]
+        for header in cases:
+            with self.subTest(header=header):
+                source=header+'\r\nNext: visible\r\n{"note":"visible"}'
+                excerpt=self.api().response_excerpt(source.encode())
+                self.assertEqual(excerpt,header.split(':',1)[0]+': [REDACTED]\r\nNext: visible\r\n{"note":"visible"}')
+
+    def test_excerpt_cookie_plain_assignment_punctuation_preserves_prose(self):
+        for key in ('Cookie','Set-Cookie'):
+            for punctuation in ('&',"'",'}'):
+                with self.subTest(key=key,punctuation=punctuation):
+                    source=key+'=sid=prefix'+punctuation+'synthetic-cookie; other=synthetic-other next prose'
+                    excerpt=self.api().response_excerpt(source.encode())
+                    self.assertEqual(excerpt,key+'=[REDACTED] next prose')
+
+    def test_excerpt_mixed_cookie_headers_and_json_preserve_neighbors(self):
+        source=('Cookie: sid=prefix&synthetic-cookie; other=synthetic-other\n'
+                'Set-Cookie: sid=prefix}synthetic-cookie; Path=/; HttpOnly\n'
+                'X-Visible: retained\n'
+                '{"Cookie":"sid=prefix&synthetic-cookie", "Set-Cookie":"sid=prefix}synthetic-other", "note":"visible"}')
+        excerpt=self.api().response_excerpt(source.encode())
+        self.assertEqual(excerpt, 'Cookie: [REDACTED]\nSet-Cookie: [REDACTED]\nX-Visible: retained\n'
+                         '{"Cookie":[REDACTED], "Set-Cookie":[REDACTED], "note":"visible"}')
+
     def test_excerpt_cookie_value_crossing_inspection_prefix_is_masked(self):
         for key in ('Cookie','Set-Cookie'):
             with self.subTest(key=key):
