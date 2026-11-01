@@ -39,6 +39,14 @@ $r=Run Start $HomeDirectory; Assert ($r.code -eq 0) $r.text
 $m=Get-Content -Raw (Join-Path $HomeDirectory 'deployment.json')|ConvertFrom-Json
 Assert ($m.container.id -eq $initial -and $m.release -eq $release) 'Start replaced running deployment.'
 $r=Run Open $HomeDirectory; Assert ($r.code -eq 0 -and $r.text -notmatch '#[A-Za-z0-9_-]{20}') 'Open leaked bootstrap.'
+# Running is insufficient: an unresponsive owned process must fail readiness visibly.
+$null=& docker.exe pause $initial
+Assert ($LASTEXITCODE -eq 0) 'Could not pause owned acceptance container.'
+try { Reject Status $HomeDirectory 'readiness' }
+finally { $null=& docker.exe unpause $initial }
+$r=Run Status $HomeDirectory; Assert ($r.code -eq 0) $r.text
+$recovered=$r.text|ConvertFrom-Json
+Assert ($recovered.ready -and $recovered.phase -eq 'ready') 'Recovered readiness must clear failed phase.'
 # Exact release integrity is checked even for Stop; preserve and restore deliberate corruption.
 $file=Join-Path $release 'README.md'; $before=[IO.File]::ReadAllBytes($file)
 try { [IO.File]::AppendAllText($file,'tampered'); Reject Status $HomeDirectory 'integrity'; Reject Stop $HomeDirectory 'integrity' }

@@ -144,13 +144,14 @@ function Ready {
     if (-not $auth.ready) { throw 'Workspace authentication readiness failed.' }
     foreach ($route in @('/api/session','/api/tasks','/api/models')) { $null=Invoke-RestMethod -Uri ($origin+$route) -WebSession $readySession -TimeoutSec 3 }
     Set-Content -LiteralPath (Join-Path $base 'runtime/bootstrap.url') -Value $url -Encoding ascii
+    if ($m.phase -in @('readiness_failed','readiness_pending')) { $m.phase='ready'; Save }
     return $url
 }
 function Show {
     $item=Owned
     $ready=$false
     if ($item.State.Running) {
-        try { $null=Ready; $ready=$true } catch { $m.phase='readiness_failed'; Save; throw 'Workspace readiness failed; private runtime diagnosis retained.' }
+        try { $null=Ready; $ready=$true } catch { $m.phase='readiness_failed'; $m.lastReadinessFailure=[DateTime]::UtcNow.ToString('o'); Save; throw 'Workspace readiness failed; private runtime diagnosis retained.' }
     }
     @{installed=$true;version=$m.version;tree=$m.tree;running=[bool]$item.State.Running;ready=$ready;phase=$m.phase;
       exitCode=$item.State.ExitCode;state=$m.state;models=$m.models;url=('http://127.0.0.1:'+$m.port+'/');
