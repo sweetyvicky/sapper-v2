@@ -76,6 +76,8 @@ async (page) => {
     fullPage: true,
   });
   await page.getByRole("button", { name: "保存草稿", exact: true }).click();
+  await page.waitForURL((url) => /^#\/tasks\/[0-9a-f]{32}$/.test(url.hash));
+  const savedTaskHash = new URL(page.url()).hash;
   await page.getByRole("button", { name: "规划新一轮", exact: true }).waitFor();
   await page.getByRole("button", { name: "编辑草稿", exact: true }).click();
   assert(
@@ -84,6 +86,9 @@ async (page) => {
       .inputValue()) === "验证批准边界、人工指导、完整漏洞复核与报告。",
     "goal persisted",
   );
+  await page
+    .getByText("高级边界：授权时长与单次请求限制", { exact: true })
+    .click();
   assert(
     (await page
       .getByRole("spinbutton", { name: "本轮授权有效期（秒）" })
@@ -91,6 +96,11 @@ async (page) => {
     "expiry persisted",
   );
   await page.getByRole("button", { name: "取消", exact: true }).click();
+  await page.waitForURL((url) => url.hash === savedTaskHash);
+  await page
+    .getByRole("heading", { name: "合成验收 · 完整操作流程", exact: true })
+    .waitFor();
+  await page.getByRole("button", { name: "规划新一轮", exact: true }).waitFor();
   await page.getByRole("button", { name: "规划新一轮", exact: true }).click();
   await page
     .getByRole("button", { name: "批准选中并开始", exact: true })

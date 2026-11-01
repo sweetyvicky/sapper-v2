@@ -10,6 +10,23 @@ async (page) => {
   await page
     .getByRole("button", { name: "批准选中并开始", exact: true })
     .click();
+  const runId = new URL(page.url()).hash.split("/").pop();
+  await page.evaluate(async (id) => {
+    const deadline = Date.now() + 5000;
+    do {
+      const { snapshot } = await (await fetch("/api/runs/" + id)).json();
+      if (
+        snapshot.run.status === "running" &&
+        snapshot.runtime.tasks.some(
+          (task) =>
+            task.state === "running" &&
+            task.proposal.action.target === "http://127.0.0.1:9551/slow",
+        )
+      ) return;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    } while (Date.now() < deadline);
+    throw new Error("slow task did not enter running state before guidance");
+  }, runId);
   await page.getByRole("tab", { name: "测试过程", exact: true }).click();
   await page
     .getByRole("textbox", { name: "给本轮的人工指导", exact: true })
@@ -21,7 +38,10 @@ async (page) => {
     .click();
   await page
     .getByRole("status")
-    .filter({ hasText: "已排队，尚未消费" })
+    .filter({
+      hasText:
+        /^已排队（尚未消费）：[0-9a-f]{32} · 消费者：.+ · 结果：.+。新动作仍须另行批准。/,
+    })
     .waitFor();
   await page
     .getByRole("tabpanel", { name: "测试过程" })

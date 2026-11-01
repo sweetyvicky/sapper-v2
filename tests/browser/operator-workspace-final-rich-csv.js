@@ -48,4 +48,4 @@ async (page) => {
     draftId,
     proof: "real UI rich CSV save/reopen/repreview/save preserves metadata",
   };
-};
+}

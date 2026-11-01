@@ -21,9 +21,47 @@ async (page) => {
     (await guided.textContent()).includes("待批准"),
     "new guided path pending",
   );
-  const pending = page.getByRole("checkbox").filter({ visible: true });
-  for (const cb of await page.getByRole("checkbox").all())
-    if (await cb.isEnabled()) await cb.check();
+  const runId = new URL(page.url()).hash.split("/").pop();
+  const plan = await page.evaluate(async (id) => {
+    const deadline = Date.now() + 10000;
+    do {
+      const { snapshot: s } = await (await fetch("/api/runs/" + id)).json();
+      if (
+        ["awaiting_approval", "ready", "completed"].includes(s.run.status) &&
+        s.plan?.actions.some((a) => a.state === "pending")
+      ) return {
+        revision: s.plan.revision,
+        rowCount: s.plan.actions.length,
+        pendingIds: s.plan.actions.filter((a) => a.state === "pending").map((a) => a.id),
+      };
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    } while (Date.now() < deadline);
+    throw new Error("current plan did not become available for precise approval");
+  }, runId);
+  await page.waitForFunction(
+    (count) => document.querySelectorAll('.action-row input[type="checkbox"]').length === count,
+    plan.rowCount,
+    { timeout: 10000 },
+  );
+  await page.waitForFunction(
+    (ids) => ids.every((id) => {
+      const cb = document.querySelector('.action-row input[type="checkbox"][value="' + id + '"]');
+      return cb && !cb.disabled;
+    }),
+    plan.pendingIds,
+    { timeout: 10000 },
+  );
+  for (const id of plan.pendingIds) {
+    const cb = page.locator('.action-row input[type="checkbox"][value="' + id + '"]');
+    await cb.waitFor({ state: "visible" });
+    assert(await cb.isEnabled(), "pending action enabled for approval");
+    await cb.check();
+    assert(await cb.isChecked(), "intended pending action selected before approval");
+  }
+  assert(
+    (await page.locator('.action-row input[type="checkbox"]:checked:not(:disabled)').count()) === plan.pendingIds.length,
+    "all and only intended pending actions selected",
+  );
   await page.getByRole("button", { name: "仅批准选中", exact: true }).click();
   await page
     .getByRole("button", { name: "开始已批准动作", exact: true })
@@ -31,6 +69,9 @@ async (page) => {
   return {
     guidance: "actual consumed consumer; new path pending before approval",
     approval: "standalone approval; no implicit start",
+    planRevision: plan.revision,
+    rowCount: plan.rowCount,
+    selectedCount: plan.pendingIds.length,
     url: page.url(),
   };
 }

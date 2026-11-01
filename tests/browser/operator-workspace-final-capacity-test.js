@@ -16,17 +16,18 @@ async (page) => {
     return window.finalCapacityRuns;
   });
   for (const id of runs)
-    await page.waitForFunction(
-      async (id) => {
+    await page.evaluate(async (id) => {
+      const deadline = Date.now() + 5000;
+      do {
         const s = (await (await fetch("/api/runs/" + id)).json()).snapshot;
-        return (
+        if (
           s.run.status === "running" &&
           s.runtime.tasks.some((t) => t.state === "running")
-        );
-      },
-      id,
-      { timeout: 5000 },
-    );
+        ) return;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      } while (Date.now() < deadline);
+      throw new Error("capacity holder did not enter running task state");
+    }, id);
   await page
     .getByRole("button", { name: "保存并规划新一轮", exact: true })
     .click();
@@ -82,4 +83,4 @@ async (page) => {
     proof:
       "real two-active capacity rejection; new/existing save succeeded, plan failed, retry saved correct identity/revision; no duplicate draft/run",
   };
-};
+}

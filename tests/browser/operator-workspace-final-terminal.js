@@ -90,4 +90,4 @@ async (page) => {
     proof:
       "real terminal consumed+failed acknowledgements in composer and finding retest, durable IDs/consumer/results, failed inputs retained",
   };
-};
+}

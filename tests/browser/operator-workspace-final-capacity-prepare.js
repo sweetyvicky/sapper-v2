@@ -31,12 +31,15 @@ async (page) => {
     return ids;
   });
   for (const id of runs)
-    await page.waitForFunction(
-      async (id) =>
-        (await (await fetch("/api/runs/" + id)).json()).snapshot.run.status ===
-        "awaiting_approval",
-      id,
-    );
+    await page.evaluate(async (id) => {
+      const deadline = Date.now() + 30000;
+      do {
+        const { snapshot } = await (await fetch("/api/runs/" + id)).json();
+        if (snapshot.run.status === "awaiting_approval") return;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      } while (Date.now() < deadline);
+      throw new Error("capacity holder did not reach awaiting_approval");
+    }, id);
   await page.getByRole("link", { name: "任务", exact: true }).click();
   await page.getByRole("button", { name: "新建任务", exact: true }).click();
   await page
@@ -63,4 +66,4 @@ async (page) => {
     proof:
       "two separate prepared basic runs; new editor ready, no target execution yet",
   };
-};
+}

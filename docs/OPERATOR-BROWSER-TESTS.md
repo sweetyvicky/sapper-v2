@@ -221,3 +221,42 @@ These snippets never mock fetch, invoke real providers or reset existing state.
 Keep raw CLI output private as described above. Expected HTTP 409 capacity rejections
 and terminal failed-message envelopes are assertions of product behavior, not failed
 acceptance. The parent installed-source/full-matrix gate remains separate.
+
+### Direct CLI snippet format and readiness
+
+Each public `run-code --filename` file is a single `async (page) => { ... }`
+function expression with **no trailing semicolon**. Invoke the checked-in file
+directly with the pinned command above; do not wrap or rewrite a private copy.
+The CLI can exit zero while emitting `### Error`, so inspect both signals.
+
+For the canonical Task → GuidanceQueued → Approve sequence, run Models first.
+Task explicitly opens the reopened draft's advanced boundary details before
+asserting saved expiry, then waits for the saved `/tasks/<id>` hash, heading and
+Plan button after Cancel. Planning the saved draft happens once. Arm the owned
+fixture immediately before GuidanceQueued. The public snippet waits for this
+run's specific `/slow` task to be running before sending guidance. After it
+returns, use a bounded condition wait (at most eight seconds) on the owned
+`state/fixture/metadata.json`: require `/slow` to increase by exactly one relative
+to the pre-Arm count, `barrier.pending === true`, and `/guided === 0`. Also read
+this run's actual `/api/runs/<id>` snapshot and require the submitted message
+to remain `queued`, with the typed composer draft/caret unchanged. A running
+task or a queued acknowledgement alone does not prove a request reached the
+barrier. Release promptly, including on failure; the barrier expires after
+25 seconds.
+
+Wait for consumed history before Approve; match the message consumer to the
+actual successful Commander call. Approve waits for the current plan/status
+and checkbox rows, asserts each intended pending action is checked, and returns
+its observed revision/row/selection counts. The proposed `/guided` path must
+remain pending and have zero target hits before approval, then still have zero
+hits after standalone approval and before a separate Start. Do not run another
+CLI operation while a `run-code` is in progress.
+
+With this pinned CLI's locally resolved Playwright dependency, an async
+`waitForFunction` predicate can resolve on its first Promise rather than retry a
+false result. The guidance and capacity snippets therefore poll async snapshot
+reads inside `page.evaluate`, with an explicit deadline and a thrown timeout;
+synchronous DOM predicates can still use `waitForFunction`. The capacity pair
+must use the same live page as well as the same CLI session: prepare stores its
+two run IDs in page memory. Do not reload, rebootstrap or replace that page
+between prepare and test; preserve the returned holder IDs if diagnosing a failure.
