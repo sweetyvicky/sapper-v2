@@ -179,3 +179,14 @@ zero-hit planning, explicit approvals/start, receipts/candidates, guidance/histo
 independent retest advice, bounded barrier/release, provider failure and durable
 restart without replay. No UI selectors, screenshots, renderer or production
 deployment are part of this fixture slice.
+
+### 定向界面回归（R1–R5）
+
+以下新增片段继续使用上述真实 fixture 与固定版本 Playwright CLI，不模拟 API 响应。先选择工作区 tab 并读取新 snapshot；同一 session 的长 `run-code` 完成前不要提交另一条浏览器命令。用已有 runner 的私密日志处理方式保存输出，并检查 `### Error`，CLI 的零退出码本身不代表成功。
+
+- `operator-workspace-profile-fixes.js`：创建明确标识的合成配置/草稿，删除被引用配置；验证缺失默认和角色引用保留、保存/规划受阻、明确清空或基础模式修复，以及删除后的 Delete/Test/Save 资格。
+- `operator-workspace-case-fixes.js`：新建基础观察轮次，真实执行和独立复测、创建案例、人工复核；另两个同源窗口通过实际表单保存评估与撤销事实。验证聚焦和隐藏标签页的未保存表单、光标选择、当前状态与失效证据选择、开放覆盖详情及保存结果刷新。角色定位器默认排除隐藏内容；先明确激活标签页，再等待真实 case 可见。各窗口轮询独立，撤销后使用有界 DOM 状态等待再断言。
+- `operator-workspace-expiry-fixes.js`：新建明确 60 秒授权的合成轮次，真实观察后保持覆盖评估打开，等待真实授权到期；验证具体到期原因、失效事实不可选、输入和选择范围保留，历史回执不消失。
+- `operator-workspace-paused-fixes-prepare.js` → helper **Arm** → `operator-workspace-paused-fixes-start.js` → helper **Release** → `operator-workspace-paused-fixes-resume.js`：新建 slow-first、beta 未批准的轮次，只批准 slow；暂停后主按钮明确批准 beta 并继续，验证实际 `/approve` → `/resume`、无 `/start`、无重复回执。开始片段完成后及时 Release，慢请求屏障最长 25 秒。
+
+调用形式：`npx --yes --package @playwright/cli@0.1.23 playwright-cli -s=<session> run-code --filename tests/browser/<上述文件名>`。暂停的部分成功分支可在 prepare 片段之前执行 `run-code 'async (page) => { await page.evaluate(() => globalThis.__operatorReviewPartialFailure = true); }'`。该内存标记只选择测试填表值，不修改 API 或运行状态；prepare 会通过可见表单将请求预算明确设为 1。slow 用尽额度后，beta 批准会持久保存，而随后继续被真实额度校验拒绝；验证界面同时确认批准成功和执行失败、刷新实际状态且无 beta 请求。该新轮次保持暂停，不能自动继续既有轮次。
