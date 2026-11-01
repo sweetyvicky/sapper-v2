@@ -227,3 +227,68 @@ class WorkspaceTests(unittest.TestCase):
     def test_import_text_keyword_contract(self):
         _,_,parse,_,_=self.api()
         self.assertEqual(parse(text='example.test')['counts']['valid'],1)
+
+    def test_report_preserves_literal_text_that_matches_state_labels(self):
+        *_, render = self.api()
+        snapshot = dict(version=1, task={'name':'failed','goal':'confirmed'},
+                        run={'status':'failed','stop_reason':'blocked'},
+                        coverage={'cells':[{'state':'untested','notes':'manual'}]},
+                        findings=[{'title':'failed','status':'candidate',
+                                   'description':'candidate','impact':'confirmed',
+                                   'reproduction':'rejected','remediation':'inconclusive',
+                                   'operator_note':'stale',
+                                   'evidence':[{'status':'succeeded','excerpt':'failed'}],
+                                   'reviews':[{'outcome':'rejected','note':'queued'}]}])
+        literals = [('任务名称','failed'),('目标','confirmed'),('停止原因','blocked'),
+                    ('备注','manual'),('标题','failed'),('描述','candidate'),
+                    ('影响','confirmed'),('复现','rejected'),('修复建议','inconclusive'),
+                    ('操作员补充','stale'),('已脱敏摘录','failed'),('审查记录','queued')]
+        states = [('状态','失败'),('状态','未测试'),('状态','候选'),
+                  ('状态','成功'),('结论','已拒绝')]
+        for format in ('html','markdown'):
+            output = render(snapshot,format)
+            for label,value in literals + states:
+                with self.subTest(format=format,label=label,value=value):
+                    expected = (f'<dt>{label}</dt><dd><pre>{value}</pre>'
+                                if format == 'html' else f'- **{label}**：{value}')
+                    self.assertTrue(expected in output,expected)
+
+    def test_model_call_terminal_retry_requires_exact_json_types(self):
+        Store, Error, *_ = self.api()
+        store, _, run = self.run_record(); rid = run['id']
+        call = store.reserve_model_call(rid,role='Commander',profile_id=str(uuid.uuid4()),purpose='plan')
+        result = {'items':[{'count':True,'metadata':{'done':False,'value':1}}],'label':'saved'}
+        done = store.finish_model_call(rid,call['id'],status='succeeded',result=result)
+        reopened = Store(self.root)
+        reordered = {'label':'saved','items':[{'metadata':{'value':1,'done':False},'count':True}]}
+        self.assertEqual(reopened.finish_model_call(rid,call['id'],status='succeeded',result=reordered),done)
+        for changed in ({'count':1,'metadata':{'done':False,'value':1}},
+                        {'count':True,'metadata':{'done':0,'value':1}},
+                        {'count':True,'metadata':{'done':False,'value':1.0}}):
+            with self.subTest(changed=changed):
+                with self.assertRaises(Error) as caught:
+                    reopened.finish_model_call(rid,call['id'],status='succeeded',
+                                               result={'items':[changed],'label':'saved'})
+                self.assertEqual(caught.exception.code,'conflict')
+        self.assertEqual(reopened.model_calls(rid),[done])
+
+    def test_unavailable_database_raises_safe_storage_error(self):
+        Store, Error, *_ = self.api()
+        store = Store(self.root / 'workspace')
+        store.database.unlink()
+        store.root.rmdir()
+        with self.assertRaises(Error) as caught:
+            store.list_drafts()
+        self.assertEqual(caught.exception.code,'storage')
+        self.assertEqual(caught.exception.message,'工作区存储操作失败')
+        self.assertNotIn(str(store.database),str(caught.exception))
+
+    def test_unavailable_database_during_initialization_raises_safe_storage_error(self):
+        Store, Error, *_ = self.api()
+        unavailable = self.root / 'unavailable'
+        unavailable.mkdir()
+        (unavailable / 'workspace.sqlite3').mkdir()
+        with self.assertRaises(Error) as caught:
+            Store(unavailable)
+        self.assertEqual(caught.exception.code,'storage')
+        self.assertEqual(caught.exception.message,'工作区存储操作失败')
